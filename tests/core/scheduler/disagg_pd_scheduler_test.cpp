@@ -170,7 +170,8 @@ DisaggPDScheduler::Options make_decode_options() {
 }
 
 std::shared_ptr<Request> make_request(
-    const std::vector<int32_t>& prompt_token_ids) {
+    const std::vector<int32_t>& prompt_token_ids,
+    bool enable_schedule_overlap = false) {
   RequestSamplingParam sampling_param;
   SchedulerParam scheduler_param;
 
@@ -191,7 +192,7 @@ std::shared_ptr<Request> make_request(
                      /*echo=*/false,
                      /*logprobs=*/false,
                      /*skip_special_tokens=*/false,
-                     /*include_usage=*/false,
+                     enable_schedule_overlap,
                      /*mm_data=*/nullptr,
                      /*service_request_id=*/nullptr);
 
@@ -571,6 +572,67 @@ TEST(DisaggPDSchedulerTest, InvalidPrefillCachedTokensFallBackToZero) {
     std::shared_ptr<Request> queued;
     ASSERT_TRUE(scheduler.pop_decode_request_for_test(&queued));
     EXPECT_EQ(queued->num_prefix_cache_tokens(), 0u);
+  }
+}
+
+TEST(DisaggPDSchedulerTest, EmptyOverlapOutputPreservesLatencyClock) {
+  for (int32_t num_speculative_tokens : {0, 3}) {
+    SCOPED_TRACE(num_speculative_tokens);
+    FakeEngine engine(
+        /*num_blocks=*/8, /*block_size=*/2, num_speculative_tokens);
+    DisaggPDScheduler::Options options = make_options();
+    options.enable_schedule_overlap(true)
+        .enable_chunked_prefill(true)
+        .num_speculative_tokens(num_speculative_tokens);
+    TestDisaggPDScheduler scheduler(&engine, options);
+    std::shared_ptr<Request> request =
+        make_request({1, 2, 3, 4}, /*enable_schedule_overlap=*/true);
+    Sequence* sequence = request->sequences().front().get();
+    sequence->kv_state().set_kv_cache_tokens_num(2);
+    ASSERT_TRUE(sequence->is_chunked_prefill_stage());
+    sequence->kv_state().set_kv_cache_tokens_num(sequence->num_prompt_tokens());
+    sequence->append_token(Token(-1));
+    ASSERT_EQ(sequence->stage(), SequenceStage::DECODE);
+    ASSERT_EQ(sequence->generated_tokens_since_latency(), 0u);
+    const absl::Time start = absl::Now() - absl::Seconds(10);
+    sequence->tbt_microseconds(start);
+    std::vector<Sequence*> sequences = {sequence};
+    std::vector<int64_t> ttft;
+    std::vector<int64_t> tbt;
+
+    scheduler.update_metrics(sequences);
+    scheduler.update_metrics(sequences);
+    scheduler.get_latency_metrics(ttft, tbt);
+    EXPECT_TRUE(ttft.empty());
+    EXPECT_TRUE(tbt.empty());
+    EXPECT_DOUBLE_EQ(sequence->time_to_first_token_latency_seconds(), 0.0);
+    EXPECT_EQ(sequence->tbt_microseconds(start + absl::Seconds(7)), 7000000);
+
+    sequence->update_last_step_token(Token(10), /*token_offset=*/0);
+    ASSERT_TRUE(sequence->is_first_token());
+    scheduler.update_metrics(sequences);
+    scheduler.get_latency_metrics(ttft, tbt);
+    ASSERT_EQ(ttft.size(), 1u);
+    EXPECT_GE(ttft.front(), 3000);
+    EXPECT_TRUE(tbt.empty());
+    EXPECT_GE(sequence->time_to_first_token_latency_seconds(), 3.0);
+    EXPECT_EQ(sequence->generated_tokens_since_latency(), 0u);
+    scheduler.update_metrics(sequences);
+    scheduler.get_latency_metrics(ttft, tbt);
+    EXPECT_TRUE(ttft.empty());
+    EXPECT_TRUE(tbt.empty());
+
+    sequence->append_token(Token(-1));
+    sequence->update_last_step_token(Token(11), /*token_offset=*/0);
+    ASSERT_FALSE(sequence->is_first_token());
+    scheduler.update_metrics(sequences);
+    scheduler.get_latency_metrics(ttft, tbt);
+    EXPECT_TRUE(ttft.empty());
+    EXPECT_EQ(tbt.size(), 1u);
+    scheduler.update_metrics(sequences);
+    scheduler.get_latency_metrics(ttft, tbt);
+    EXPECT_TRUE(ttft.empty());
+    EXPECT_TRUE(tbt.empty());
   }
 }
 

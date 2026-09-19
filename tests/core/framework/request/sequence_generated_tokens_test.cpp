@@ -17,6 +17,7 @@ limitations under the License.
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "framework/request/incremental_decoder.h"
@@ -84,6 +85,31 @@ TEST(SequenceGeneratedTokensTest, TbtResetsGeneratedTokenCount) {
 
   sequence.append_token(Token(12));
   EXPECT_EQ(sequence.generated_tokens_since_latency(), 1u);
+}
+
+TEST(SequenceGeneratedTokensTest, ForkPreservesPendingLatencyObservation) {
+  for (bool enable_schedule_overlap : {false, true}) {
+    SCOPED_TRACE(enable_schedule_overlap);
+    Sequence sequence = make_decode_ready_sequence(enable_schedule_overlap);
+    const absl::Time start = absl::FromUnixSeconds(100);
+    sequence.tbt_microseconds(start);
+    if (enable_schedule_overlap) {
+      sequence.append_token(Token(-1));
+      sequence.update_last_step_token(Token(10), /*token_offset=*/0);
+    } else {
+      sequence.append_token(Token(10));
+    }
+    ASSERT_TRUE(sequence.is_first_token());
+    ASSERT_EQ(sequence.generated_tokens_since_latency(), 1u);
+
+    std::unique_ptr<Sequence> fork = sequence.fork(/*index=*/1);
+    EXPECT_TRUE(fork->is_first_token());
+    EXPECT_EQ(fork->generated_tokens_since_latency(), 1u);
+    EXPECT_EQ(fork->tbt_microseconds(start + absl::Seconds(7)), 7000000);
+    EXPECT_EQ(fork->generated_tokens_since_latency(), 0u);
+    EXPECT_EQ(sequence.generated_tokens_since_latency(), 1u);
+    EXPECT_EQ(sequence.tbt_microseconds(start + absl::Seconds(9)), 9000000);
+  }
 }
 
 TEST(SequenceGeneratedTokensTest, IgnoresOverlapFakeTokens) {

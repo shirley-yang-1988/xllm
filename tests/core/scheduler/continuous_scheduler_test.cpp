@@ -7,6 +7,7 @@
 #include <limits>
 #include <optional>
 
+#include "core/common/metrics.h"
 #include "core/framework/config/kv_cache_config.h"
 #include "core/framework/config/rec_config.h"
 #include "core/framework/config/scheduler_config.h"
@@ -255,7 +256,8 @@ std::vector<std::shared_ptr<Request>> generate_request(
 std::shared_ptr<Request> generate_request_with_prompt_tokens(
     const std::vector<int32_t>& prompt_token_ids,
     int32_t max_tokens,
-    int32_t max_context_len) {
+    int32_t max_context_len,
+    bool enable_schedule_overlap = false) {
   RequestSamplingParam sampling_param;
   SchedulerParam scheduler_param;
 
@@ -276,7 +278,7 @@ std::shared_ptr<Request> generate_request_with_prompt_tokens(
                          false,
                          false,
                          false,
-                         false,
+                         enable_schedule_overlap,
                          nullptr,
                          nullptr);
 
@@ -358,6 +360,85 @@ TEST(ContinuousSchedulerFactoryTest,
 
   // All non-PD paths now create ContinuousScheduler with BatchMode routing.
   EXPECT_NE(dynamic_cast<ContinuousScheduler*>(scheduler.get()), nullptr);
+}
+
+TEST(ContinuousSchedulerTest, EmptyOverlapOutputPreservesLatencyClock) {
+  ScopedConfigValue<bool> chunked_prefill(
+      SchedulerConfig::get_instance().enable_chunked_prefill(), true);
+  for (int32_t num_speculative_tokens : {0, 3}) {
+    SCOPED_TRACE(num_speculative_tokens);
+    ContinuousScheduler::Options options =
+        create_scheduler_options(32, 1, num_speculative_tokens, 2, 1);
+    options.enable_chunked_prefill(true).enable_schedule_overlap(true);
+    FakeEngine engine(/*num_blocks=*/16, /*block_size=*/4);
+    TestContinuousScheduler scheduler(&engine, options);
+    std::shared_ptr<Request> request =
+        generate_request_with_prompt_tokens({1, 2, 3, 4},
+                                            /*max_tokens=*/8,
+                                            /*max_context_len=*/32,
+                                            /*enable_schedule_overlap=*/true);
+    ASSERT_TRUE(scheduler.add_request(request));
+    std::vector<Batch> batches = scheduler.prepare_batch_test();
+    ASSERT_EQ(batches.size(), 1u);
+    ASSERT_EQ(batches.front().size(), 1u);
+    Sequence* sequence = request->sequences().front().get();
+    ASSERT_EQ(batches.front()[0], sequence);
+
+    sequence->kv_state().set_kv_cache_tokens_num(2);
+    ASSERT_TRUE(sequence->is_chunked_prefill_stage());
+    // Preparing the final chunk advances shared KV state before the previous
+    // chunk's output commits any real token.
+    sequence->kv_state().set_kv_cache_tokens_num(sequence->num_prompt_tokens());
+    sequence->append_token(Token(-1));
+    ASSERT_EQ(sequence->stage(), SequenceStage::DECODE);
+    ASSERT_EQ(sequence->generated_tokens_since_latency(), 0u);
+    const absl::Time start = absl::Now() - absl::Seconds(10);
+    sequence->tbt_microseconds(start);
+    const int64_t ttft_count =
+        HISTOGRAM_time_to_first_token_latency_milliseconds.count();
+    const int64_t itl_count =
+        HISTOGRAM_inter_token_latency_microseconds.count();
+    const int64_t itl_ms_count =
+        HISTOGRAM_inter_token_latency_milliseconds.count();
+
+    // The existing hook selects the current running set; its sequences have
+    // the same shared state seen while consuming a delayed overlap output.
+    scheduler.process_batch_output_test(/*enable_schedule_overlap=*/false);
+    scheduler.process_batch_output_test(/*enable_schedule_overlap=*/false);
+    EXPECT_EQ(HISTOGRAM_time_to_first_token_latency_milliseconds.count(),
+              ttft_count);
+    EXPECT_EQ(HISTOGRAM_inter_token_latency_microseconds.count(), itl_count);
+    EXPECT_EQ(HISTOGRAM_inter_token_latency_milliseconds.count(), itl_ms_count);
+    EXPECT_DOUBLE_EQ(sequence->time_to_first_token_latency_seconds(), 0.0);
+    EXPECT_EQ(sequence->tbt_microseconds(start + absl::Seconds(7)), 7000000);
+
+    sequence->update_last_step_token(Token(10), /*token_offset=*/0);
+    ASSERT_TRUE(sequence->is_first_token());
+    ASSERT_EQ(sequence->generated_tokens_since_latency(), 1u);
+    scheduler.process_batch_output_test(/*enable_schedule_overlap=*/false);
+    EXPECT_EQ(HISTOGRAM_time_to_first_token_latency_milliseconds.count(),
+              ttft_count + 1);
+    EXPECT_EQ(HISTOGRAM_inter_token_latency_microseconds.count(), itl_count);
+    EXPECT_GE(sequence->time_to_first_token_latency_seconds(), 3.0);
+    EXPECT_EQ(sequence->generated_tokens_since_latency(), 0u);
+    scheduler.process_batch_output_test(/*enable_schedule_overlap=*/false);
+    EXPECT_EQ(HISTOGRAM_time_to_first_token_latency_milliseconds.count(),
+              ttft_count + 1);
+
+    sequence->append_token(Token(-1));
+    sequence->update_last_step_token(Token(11), /*token_offset=*/0);
+    ASSERT_FALSE(sequence->is_first_token());
+    scheduler.process_batch_output_test(/*enable_schedule_overlap=*/false);
+    EXPECT_EQ(HISTOGRAM_inter_token_latency_microseconds.count(),
+              itl_count + 1);
+    EXPECT_EQ(HISTOGRAM_inter_token_latency_milliseconds.count(),
+              itl_ms_count + 1);
+    scheduler.process_batch_output_test(/*enable_schedule_overlap=*/false);
+    EXPECT_EQ(HISTOGRAM_inter_token_latency_microseconds.count(),
+              itl_count + 1);
+    EXPECT_EQ(HISTOGRAM_inter_token_latency_milliseconds.count(),
+              itl_ms_count + 1);
+  }
 }
 
 TEST(ContinuousSchedulerTest, PrefetchCompletesBeforeSchedulerQueueAdmission) {

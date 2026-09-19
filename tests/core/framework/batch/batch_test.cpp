@@ -255,6 +255,56 @@ class ScopedPrefillChunkStride final {
   int32_t previous_;
 };
 
+class BatchSpeculativeStatsTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    original_overlap_ =
+        SchedulerConfig::get_instance().enable_schedule_overlap();
+    original_chunked_prefill_ =
+        SchedulerConfig::get_instance().enable_chunked_prefill();
+    SchedulerConfig::get_instance().enable_chunked_prefill(false);
+    BlockManager::Options options;
+    options.num_blocks(8).block_size(16);
+    manager_ = std::make_unique<BlockManagerImpl>(options);
+    stopping_checker_.set_max_generated_tokens(8);
+    stopping_checker_.set_eos_token(100);
+    request_stats_ = std::make_shared<SpeculativeTokenStats>();
+  }
+
+  void TearDown() override {
+    SchedulerConfig::get_instance().enable_schedule_overlap(original_overlap_);
+    SchedulerConfig::get_instance().enable_chunked_prefill(
+        original_chunked_prefill_);
+  }
+
+  Sequence make_sequence(bool enable_schedule_overlap) {
+    SchedulerConfig::get_instance().enable_schedule_overlap(
+        enable_schedule_overlap);
+    SequenceParams params;
+    params.seq_capacity = 16;
+    params.stopping_checker = &stopping_checker_;
+    params.sampling_param = &sampling_param_;
+    params.speculative_token_stats = request_stats_;
+    params.enable_schedule_overlap = enable_schedule_overlap;
+    IncrementalDecoder decoder("", 1, false, false);
+    return Sequence(/*index=*/0,
+                    /*prompt_token_ids=*/{10},
+                    torch::Tensor(),
+                    MMData(),
+                    std::move(decoder),
+                    params);
+  }
+
+  std::unique_ptr<BlockManagerImpl> manager_;
+  RequestSamplingParam sampling_param_;
+  StoppingChecker stopping_checker_;
+  std::shared_ptr<SpeculativeTokenStats> request_stats_;
+
+ private:
+  bool original_overlap_ = false;
+  bool original_chunked_prefill_ = false;
+};
+
 class ScopedJsonObjectOutput final {
  public:
   explicit ScopedJsonObjectOutput(bool enabled)
@@ -668,6 +718,92 @@ TEST(BatchTest, ProcessRawOutputAccumulatesRequestSpeculativeStats) {
 
   EXPECT_EQ(request_stats->accepted_tokens, 3);
   EXPECT_EQ(request_stats->proposed_tokens, 8);
+}
+
+TEST_F(BatchSpeculativeStatsTest, OverlapCountsOnlyRealValidationOutput) {
+  Sequence sequence = make_sequence(/*enable_schedule_overlap=*/true);
+  sequence.add_blocks(BlockType::KV, manager_->allocate(1));
+  Batch batch(&sequence);
+  (void)batch.prepare_forward_input(
+      /*num_decoding_tokens=*/1, /*min_decoding_batch_size=*/0, ModelArgs());
+
+  RawForwardOutput fake_output;
+  fake_output.outputs.emplace_back(make_raw_sample_output(-1, std::nullopt));
+  batch.process_sample_output(fake_output, /*replace_fake_token=*/false);
+  EXPECT_EQ(request_stats_->accepted_tokens, 0);
+  EXPECT_EQ(request_stats_->proposed_tokens, 0);
+
+  // Target prefill generates the first token without proposing any drafts.
+  RawForwardOutput prefill_output;
+  prefill_output.outputs.emplace_back(
+      make_raw_sample_output(101, std::nullopt));
+  batch.process_sample_output(prefill_output, /*replace_fake_token=*/true);
+  EXPECT_EQ(sequence.tokens()[sequence.num_prompt_tokens()], 101);
+  EXPECT_EQ(request_stats_->accepted_tokens, 0);
+  EXPECT_EQ(request_stats_->proposed_tokens, 0);
+
+  (void)batch.prepare_forward_input(
+      /*num_decoding_tokens=*/1, /*min_decoding_batch_size=*/0, ModelArgs());
+  batch.process_sample_output(fake_output, /*replace_fake_token=*/false);
+  EXPECT_EQ(sequence.tokens()[sequence.num_prompt_tokens() + 1], -1);
+  EXPECT_EQ(request_stats_->accepted_tokens, 0);
+  EXPECT_EQ(request_stats_->proposed_tokens, 0);
+
+  RawSampleOutput sample_output;
+  sample_output.tokens = {
+      RawToken{.id = 201}, RawToken{.id = 202}, RawToken{.id = 203}};
+  sample_output.speculative_token_stats = {2, 3};
+  RawForwardOutput real_output;
+  real_output.outputs.emplace_back(std::move(sample_output));
+  batch.process_sample_output(real_output, /*replace_fake_token=*/true);
+
+  EXPECT_EQ(sequence.num_generated_tokens(), 4);
+  EXPECT_EQ(sequence.tokens()[sequence.num_prompt_tokens() + 1], 201);
+  EXPECT_EQ(sequence.tokens()[sequence.num_prompt_tokens() + 2], 202);
+  EXPECT_EQ(sequence.tokens()[sequence.num_prompt_tokens() + 3], 203);
+  EXPECT_EQ(request_stats_->accepted_tokens, 2);
+  EXPECT_EQ(request_stats_->proposed_tokens, 3);
+}
+
+TEST_F(BatchSpeculativeStatsTest, TruncationPreservesExecutedValidationStats) {
+  for (bool stop_at_eos : {false, true}) {
+    SCOPED_TRACE(stop_at_eos ? "EOS" : "maximum length");
+    request_stats_ = std::make_shared<SpeculativeTokenStats>();
+    stopping_checker_.set_max_generated_tokens(stop_at_eos ? 8 : 2);
+    Sequence sequence = make_sequence(/*enable_schedule_overlap=*/false);
+    sequence.add_blocks(BlockType::KV, manager_->allocate(1));
+    Batch batch(&sequence);
+    (void)batch.prepare_forward_input(
+        /*num_decoding_tokens=*/1, /*min_decoding_batch_size=*/0, ModelArgs());
+
+    RawForwardOutput prefill_output;
+    prefill_output.outputs.emplace_back(
+        make_raw_sample_output(101, std::nullopt));
+    batch.process_sample_output(prefill_output, /*replace_fake_token=*/false);
+    ASSERT_EQ(sequence.num_generated_tokens(), 1);
+    EXPECT_EQ(request_stats_->accepted_tokens, 0);
+    EXPECT_EQ(request_stats_->proposed_tokens, 0);
+
+    (void)batch.prepare_forward_input(
+        /*num_decoding_tokens=*/1, /*min_decoding_batch_size=*/0, ModelArgs());
+    RawSampleOutput sample_output;
+    sample_output.tokens = {RawToken{.id = stop_at_eos ? 100 : 201},
+                            RawToken{.id = 202},
+                            RawToken{.id = 203},
+                            RawToken{.id = 204}};
+    sample_output.speculative_token_stats = {3, 3};
+    RawForwardOutput real_output;
+    real_output.outputs.emplace_back(std::move(sample_output));
+    batch.process_sample_output(real_output, /*replace_fake_token=*/false);
+
+    EXPECT_TRUE(sequence.finished());
+    EXPECT_EQ(sequence.finish_reason(),
+              stop_at_eos ? FinishReason::STOP : FinishReason::LENGTH);
+    EXPECT_EQ(sequence.num_generated_tokens(), 2);
+    // The verifier executed the whole block, although only one token survived.
+    EXPECT_EQ(request_stats_->accepted_tokens, 3);
+    EXPECT_EQ(request_stats_->proposed_tokens, 3);
+  }
 }
 
 TEST(SequenceTest, JsonObjectCommitAdvancesGrammarOnce) {

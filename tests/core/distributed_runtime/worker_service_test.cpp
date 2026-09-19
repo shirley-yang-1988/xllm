@@ -92,7 +92,24 @@ TEST(SpeculativeTokenStatsTest, CountsAdaptiveTokensPerSequence) {
   EXPECT_EQ(block_stats[2].proposed_tokens, 0);
 }
 
-TEST(SpeculativeTokenStatsTest, BlockGreedyExcludesTargetTokens) {
+TEST(SpeculativeTokenStatsTest, MtpUsesActualProposalWidths) {
+  const torch::Tensor tokens = torch::tensor(
+      {{10, -1, -1, -1}, {20, 21, -1, -1}, {30, 31, 32, 33}}, torch::kInt32);
+  const std::vector<int32_t> proposed_tokens = {0, 1, 3};
+  const auto stats =
+      calculate_mtp_speculative_token_stats(tokens, proposed_tokens);
+
+  ASSERT_EQ(stats.size(), proposed_tokens.size());
+  int64_t total_proposed = 0;
+  for (size_t row = 0; row < proposed_tokens.size(); ++row) {
+    EXPECT_EQ(stats[row].accepted_tokens, proposed_tokens[row]);
+    EXPECT_EQ(stats[row].proposed_tokens, proposed_tokens[row]);
+    total_proposed += stats[row].proposed_tokens;
+  }
+  EXPECT_EQ(total_proposed, 4);
+}
+
+TEST(SpeculativeTokenStatsTest, GreedyExcludesTargetTokens) {
   const torch::Tensor draft_tokens = torch::tensor(
       {{1, 2, 3}, {1, 2, 3}, {1, 2, 3}, {1, 2, 3}}, torch::kInt64);
   // Reject at each possible position, then accept the entire final row.
@@ -113,11 +130,25 @@ TEST(SpeculativeTokenStatsTest, BlockGreedyExcludesTargetTokens) {
 
   const auto stats =
       calculate_block_speculative_token_stats(masked_tokens, {3, 3, 3, 3});
+  const auto mtp_stats =
+      calculate_mtp_speculative_token_stats(masked_tokens, {3, 3, 3, 3});
+  const auto output_stats = calculate_speculative_output_stats(
+      masked_tokens, /*num_speculative_tokens=*/3);
   ASSERT_EQ(stats.size(), 4);
+  ASSERT_EQ(mtp_stats.size(), 4);
+  ASSERT_EQ(output_stats.sequence_stats.size(), 4);
   for (size_t row = 0; row < stats.size(); ++row) {
     EXPECT_EQ(stats[row].accepted_tokens, static_cast<int64_t>(row));
     EXPECT_EQ(stats[row].proposed_tokens, 3);
+    EXPECT_EQ(mtp_stats[row].accepted_tokens, static_cast<int64_t>(row));
+    EXPECT_EQ(mtp_stats[row].proposed_tokens, 3);
+    EXPECT_EQ(output_stats.sequence_stats[row].accepted_tokens,
+              static_cast<int64_t>(row));
+    EXPECT_EQ(output_stats.sequence_stats[row].proposed_tokens, 3);
   }
+  EXPECT_EQ(output_stats.committed_tokens, 10);
+  EXPECT_EQ(output_stats.accepted_per_position,
+            (std::vector<int64_t>{3, 2, 1}));
 }
 
 TEST(SpeculativeTokenStatsTest, BlockRandomExcludesTargetTokens) {
