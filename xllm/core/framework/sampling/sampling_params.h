@@ -184,6 +184,10 @@ struct SamplingParameters {
   bool use_beam_search = false;
 };
 
+// Draft proposals and acceptances executed by the verifier, before output
+// truncation. Accepted drafts exclude the target replacement/bonus
+// contribution; neither count can be inferred from the number of streamed
+// output chunks.
 struct SpeculativeTokenStats {
   int64_t accepted_tokens = 0;
   int64_t proposed_tokens = 0;

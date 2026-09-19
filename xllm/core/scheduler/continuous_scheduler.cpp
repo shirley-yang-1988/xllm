@@ -612,6 +612,11 @@ void ContinuousScheduler::update_token_latency_metrics(
     }
     // Read the committed-token count before tbt(), which resets it.
     const size_t committed_tokens = sequence->generated_tokens_since_latency();
+    // Overlap can advance KV state to decode before any real token arrives.
+    // Preserve the latency clock until there is a committed token to observe.
+    if (committed_tokens == 0) {
+      continue;
+    }
     const int64_t tbt_microseconds = sequence->tbt_microseconds(now);
     const int64_t tbt_milliseconds =
         microseconds_to_milliseconds(tbt_microseconds);
@@ -622,7 +627,7 @@ void ContinuousScheduler::update_token_latency_metrics(
           static_cast<double>(tbt_milliseconds) / 1000);
     } else {
       int64_t inter_token_latency_us = tbt_microseconds;
-      if (speculative_metrics_enabled && committed_tokens > 0) {
+      if (speculative_metrics_enabled) {
         inter_token_latency_us =
             amortized_token_latency(tbt_microseconds, committed_tokens);
       }

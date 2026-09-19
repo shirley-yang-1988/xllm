@@ -171,6 +171,7 @@ Sequence::Sequence(const Sequence& other, size_t index)
       effective_restore_tokens_(other.effective_restore_tokens_),
       host_cache_copy_units_(other.host_cache_copy_units_),
       latest_generate_time_(other.latest_generate_time_),
+      generated_tokens_since_latency_(other.generated_tokens_since_latency_),
       time_to_first_token_latency_seconds_(
           other.time_to_first_token_latency_seconds_),
       is_first_token_(other.is_first_token_),
