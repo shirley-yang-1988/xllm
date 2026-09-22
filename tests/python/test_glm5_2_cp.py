@@ -419,7 +419,7 @@ def test_glm_attention_reduces_o_projection_in_fp32_for_tensor_parallel() -> Non
         patch.object(
             glm5_2.kernels,
             "batch_matmul_transpose",
-            return_value=projected,
+            side_effect=(torch.tensor([[[1.0]], [[3.0]]]), projected),
             create=True,
         ) as project,
         patch.object(
@@ -436,7 +436,12 @@ def test_glm_attention_reduces_o_projection_in_fp32_for_tensor_parallel() -> Non
             previous_topk,
         )
 
-    project.assert_called_once()
+    assert project.call_count == 2
+    q_args, v_args = (call.args for call in project.call_args_list)
+    torch.testing.assert_close(q_args[0], torch.tensor([[[1.0]], [[3.0]]]))
+    assert q_args[1] is attention.W_UK
+    assert v_args[0] is backend.execute_mla.return_value
+    assert v_args[1] is attention.W_UV
     reduce.assert_called_once()
     assert reduce.call_args.args[0].dtype == torch.float32
     assert output.dtype == projected.dtype
@@ -496,7 +501,12 @@ def test_glm_attention_reuse_updates_index_cache() -> None:
             return_value=(torch.empty(0), torch.empty(0)),
         ),
         patch.object(glm5_2, "_interleave_rope_with", side_effect=lambda value, *_args: value),
-        patch.object(glm5_2.kernels, "batch_matmul_transpose", return_value=projected, create=True),
+        patch.object(
+            glm5_2.kernels,
+            "batch_matmul_transpose",
+            side_effect=(hidden[:, :1].unsqueeze(1), projected),
+            create=True,
+        ),
     ):
         _, topk = attention(
             hidden,
