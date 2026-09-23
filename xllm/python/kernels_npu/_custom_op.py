@@ -84,6 +84,22 @@ def _l2_norm_fake(
     return torch.empty_like(input)
 
 
+def _atb_matmul_ein_sum_fake(input: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+    if input.ndim != 3 or weight.ndim != 3:
+        raise ValueError("ATB EIN_SUM expects [T,H,D] input and [H,D,O] weight")
+    if input.shape[0] == 0 or input.shape[1] == 0 or input.shape[2] == 0 or weight.shape[2] == 0:
+        raise ValueError("ATB EIN_SUM requires nonempty dimensions")
+    if input.shape[1] != weight.shape[0] or input.shape[2] != weight.shape[1]:
+        raise ValueError("ATB EIN_SUM head or reduction dimension mismatch")
+    if input.dtype != torch.bfloat16 or weight.dtype != input.dtype:
+        raise ValueError("ATB EIN_SUM requires matching bf16 inputs")
+    if input.device.type != "npu" or input.device != weight.device:
+        raise ValueError("ATB EIN_SUM requires inputs on the same NPU")
+    if not weight.is_contiguous():
+        raise ValueError("ATB EIN_SUM weight must be contiguous")
+    return input.new_empty((input.shape[0], input.shape[1], weight.shape[2]))
+
+
 def _chunk_gated_delta_rule_fake(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -1035,6 +1051,7 @@ def _sfa_dcp_remap_out_fake(
 register_fake("xllm_ops::rms_norm", _rms_norm_fake)
 register_fake("xllm_ops::rms_norm_gated", _rms_norm_gated_fake)
 register_fake("xllm_ops::l2_norm", _l2_norm_fake)
+register_fake("xllm_ops::atb_matmul_ein_sum", _atb_matmul_ein_sum_fake)
 register_fake("xllm_ops::chunk_gated_delta_rule", _chunk_gated_delta_rule_fake)
 register_fake("xllm_ops::causal_conv1d_qkv_prefill", _causal_conv1d_qkv_prefill_fake)
 register_fake(

@@ -486,6 +486,7 @@ TORCH_LIBRARY(xllm_ops, m) {
       "rms_norm_gated(Tensor input, Tensor gate, Tensor weight, float eps) -> "
       "Tensor");
   m.def("l2_norm(Tensor input, float eps) -> Tensor");
+  m.def("atb_matmul_ein_sum(Tensor input, Tensor weight) -> Tensor");
   m.def(
       "chunk_gated_delta_rule(Tensor q, Tensor k, Tensor v, Tensor g, "
       "Tensor beta, Tensor initial_state, Tensor cu_seqlens) -> "
@@ -692,6 +693,7 @@ TORCH_LIBRARY_IMPL(xllm_ops, PrivateUse1, m) {
   m.impl("rms_norm", TORCH_FN(xllm::rms_norm_npu));
   m.impl("rms_norm_gated", TORCH_FN(xllm::rms_norm_gated_npu));
   m.impl("l2_norm", TORCH_FN(xllm::l2_norm_npu));
+  m.impl("atb_matmul_ein_sum", TORCH_FN(xllm::kernel::npu::atb_matmul_ein_sum));
   m.impl("chunk_gated_delta_rule", TORCH_FN(xllm::chunk_gated_delta_rule_npu));
   m.impl("causal_conv1d_prefill", TORCH_FN(xllm::causal_conv1d_prefill_npu));
   m.impl("causal_conv1d_qkv_prefill",

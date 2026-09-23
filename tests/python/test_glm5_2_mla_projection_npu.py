@@ -128,3 +128,27 @@ def test_projection(
             assert not torch.equal(current, previous), "Projection reused stale input values"
         previous = current
     torch.npu.synchronize()
+
+
+@pytest.mark.parametrize("layout", ("q_contiguous", "q_split", "q_offset", "v_contiguous"))
+@pytest.mark.parametrize("heads,q_dim,v_dim", ((4, 192, 256), (8, 128, 128)), ids=("glm", "deepseek"))
+def test_atb_ein_sum_projection(layout: str, heads: int, q_dim: int, v_dim: int) -> None:
+    assert torch.npu.is_available(), "ATB projection tests require an Ascend NPU"
+    import xllm
+
+    _ = xllm.xllm_export
+    from xllm.python.kernels_npu.linear import atb_matmul_ein_sum
+
+    _, x, weight = _make_inputs(4, layout, torch.bfloat16, heads, q_dim, v_dim)
+    actual = atb_matmul_ein_sum(x, weight)
+    baseline = torch.ops.npu.npu_transpose_batchmatmul(
+        x, weight, perm_x1=(1, 0, 2), perm_x2=(0, 1, 2), perm_y=(1, 0, 2)
+    )
+    torch.npu.synchronize()
+    reference = torch.einsum("thd,hdo->tho", x.cpu().float(), weight.cpu().float())
+    assert actual.shape == reference.shape
+    assert actual.dtype == x.dtype and actual.device == x.device and actual.is_contiguous()
+    torch.testing.assert_close(actual.cpu().float(), reference, rtol=1e-2, atol=2e-2)
+    torch.testing.assert_close(baseline.cpu().float(), reference, rtol=1e-2, atol=2e-2)
+    max_abs = (actual.float() - baseline.float()).abs().max().item()
+    assert max_abs <= (0 if layout.startswith("q_") else 0.25), f"ATB/TBMM {layout} max_abs={max_abs}"

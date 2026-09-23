@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""NPU weight preparation for linear layers."""
+"""NPU matmul kernels and weight preparation for linear layers."""
 
 from __future__ import annotations
 
@@ -62,7 +62,18 @@ def prepare_quant_weight(
     return torch_npu.npu_format_cast(transposed, _FRACTAL_NZ_FORMAT)
 
 
+def atb_matmul_ein_sum(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+    """Run fixed ATB MATMUL_EIN_SUM: [T,H,D],[H,D,O]->[T,H,O].
+
+    Both operands must be BF16 tensors on the same NPU in ND format. Weight
+    must be contiguous; a strided input is copied to contiguous storage.
+    This is ATB's fixed matmul mode, not a general einsum expression parser.
+    """
+    return torch.ops.xllm_ops.atb_matmul_ein_sum(x, weight)
+
+
 __all__ = [
+    "atb_matmul_ein_sum",
     "prepare_row_parallel_weight",
     "prepare_quant_weight",
 ]

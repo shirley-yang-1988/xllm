@@ -20,7 +20,7 @@ import torch
 import torch.nn.functional as F
 import torch_npu
 
-from .attention import batch_matmul_transpose
+from .linear import atb_matmul_ein_sum
 from .normalization import rms_norm
 from .quantization import dynamic_quant, quant_matmul, quantize_per_tensor
 
@@ -360,7 +360,7 @@ def deepseek_mla_preprocess_decode(
         qk_nope_head_dim + qk_rope_head_dim,
     )
     q_nope, q_rope = q.split([qk_nope_head_dim, qk_rope_head_dim], dim=-1)
-    q_latent = batch_matmul_transpose(q_nope, w_uk)
+    q_latent = atb_matmul_ein_sum(q_nope, w_uk)
     num_tokens = hidden.shape[0]
     q_pe = torch_npu.npu_interleave_rope(
         q_rope.view(num_tokens, num_heads, 1, qk_rope_head_dim),
@@ -439,7 +439,7 @@ def deepseek_mla_preprocess_decode_dynamic(
         qk_nope_head_dim + qk_rope_head_dim,
     )
     q_nope, q_rope = q.split([qk_nope_head_dim, qk_rope_head_dim], dim=-1)
-    q_latent = batch_matmul_transpose(q_nope, w_uk)
+    q_latent = atb_matmul_ein_sum(q_nope, w_uk)
     num_tokens = hidden.shape[0]
     q_pe = torch_npu.npu_interleave_rope(
         q_rope.view(num_tokens, num_heads, 1, qk_rope_head_dim),

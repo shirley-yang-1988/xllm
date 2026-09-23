@@ -418,8 +418,8 @@ def test_glm_attention_reduces_o_projection_in_fp32_for_tensor_parallel() -> Non
         patch.object(glm5_2, "_interleave_rope_with", side_effect=lambda value, *_args: value),
         patch.object(
             glm5_2.kernels,
-            "batch_matmul_transpose",
-            side_effect=(torch.tensor([[[1.0]], [[3.0]]]), projected),
+            "atb_matmul_ein_sum",
+            side_effect=[torch.tensor([[[1.0]], [[3.0]]]), projected],
             create=True,
         ),
         patch.object(
@@ -497,8 +497,8 @@ def test_glm_attention_reuse_updates_index_cache() -> None:
         patch.object(glm5_2, "_interleave_rope_with", side_effect=lambda value, *_args: value),
         patch.object(
             glm5_2.kernels,
-            "batch_matmul_transpose",
-            side_effect=(hidden[:, :1].unsqueeze(1), projected),
+            "atb_matmul_ein_sum",
+            side_effect=[hidden[:, :1].unsqueeze(1), projected],
             create=True,
         ),
     ):
@@ -637,7 +637,7 @@ def test_glm_attention_fused_decode_preprocesses_and_writes_cache_once(
         ) as mlapo_v2,
         patch.object(
             glm5_2.kernels,
-            "batch_matmul_transpose",
+            "atb_matmul_ein_sum",
             return_value=projected,
             create=True,
         ),
@@ -756,7 +756,7 @@ def test_glm_attention_dynamic_fused_decode_reuses_topk_after_cache_write() -> N
         ) as static_preprocess,
         patch.object(
             glm5_2.kernels,
-            "batch_matmul_transpose",
+            "atb_matmul_ein_sum",
             return_value=projected,
             create=True,
         ),

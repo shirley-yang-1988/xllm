@@ -26,6 +26,7 @@ limitations under the License.
 #include <torch/extension.h>
 #include <torch/torch.h>
 
+#include <cmath>
 #include <filesystem>
 #include <limits>
 #include <optional>
@@ -180,6 +181,34 @@ TEST_F(NpuXllmOpsTest, DispatcherRmsNormMatchesReference) {
              .abs()
              .max()
              .item<float>();
+}
+
+TEST_F(NpuXllmOpsTest, DispatcherAtbMatmulEinSumMatchesReference) {
+  py::gil_scoped_acquire gil;
+  torch::manual_seed(20260923);
+  const auto input_cpu =
+      torch::randn({4, 4, 512}, torch::TensorOptions().dtype(torch::kBFloat16));
+  const auto weight_cpu =
+      (torch::randn({4, 512, 256}, torch::kFloat32) / std::sqrt(512.0))
+          .to(torch::kBFloat16);
+  const auto input = input_cpu.to(torch::kPrivateUse1);
+  const auto weight = weight_cpu.to(torch::kPrivateUse1);
+  const auto op = c10::Dispatcher::singleton().findSchemaOrThrow(
+      "xllm_ops::atb_matmul_ein_sum", "");
+  const auto output =
+      op.typed<torch::Tensor(const torch::Tensor&, const torch::Tensor&)>()
+          .call(input, weight);
+  const auto actual = output.cpu().to(torch::kFloat32);
+  const auto reference = torch::einsum(
+      "thd,hdo->tho",
+      {input_cpu.to(torch::kFloat32), weight_cpu.to(torch::kFloat32)});
+
+  ASSERT_EQ(output.sizes(), reference.sizes());
+  EXPECT_EQ(output.scalar_type(), input.scalar_type());
+  EXPECT_EQ(output.device(), input.device());
+  EXPECT_TRUE(output.is_contiguous());
+  EXPECT_TRUE(torch::allclose(actual, reference, /*rtol=*/1e-2, /*atol=*/2e-2))
+      << "max abs diff = " << (actual - reference).abs().max().item<float>();
 }
 
 TEST_F(NpuXllmOpsTest, DispatcherSiluAndMulMatchesReference) {
