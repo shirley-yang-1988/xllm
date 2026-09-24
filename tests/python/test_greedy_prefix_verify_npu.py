@@ -463,16 +463,17 @@ def test_small_dtype_matrix(runner: _KernelRunner, bits: tuple[int, int, int]) -
     assert tuple(tensor.element_size() * 8 for tensor in (inputs.draft, inputs.target, inputs.bonus)) == bits
 
 
-@pytest.mark.parametrize("column_stride", [2, 65537], ids=["non-unit", "huge"])
+@pytest.mark.parametrize(
+    ("width", "column_stride"),
+    [(3, 2), (33, 2), (65, 3), (3, 65537)],
+    ids=["non-unit", "window-boundary", "multiple-windows", "huge"],
+)
 @pytest.mark.parametrize("mask", [True, False])
-def test_int64_independent_strided_storage(runner: _KernelRunner, column_stride: int, mask: bool) -> None:
-    draft_cpu, target_cpu, bonus_cpu = _logical_ids(3, 3, "rematch", edge_values=True)
-    draft, draft_storage = _strided_input(
-        draft_cpu, 64, runner.device, (2 * column_stride + 11, column_stride), offset=17
-    )
-    target, target_storage = _strided_input(
-        target_cpu, 64, runner.device, (2 * column_stride + 19, column_stride), offset=23
-    )
+def test_int64_independent_strided_storage(runner: _KernelRunner, width: int, column_stride: int, mask: bool) -> None:
+    draft_cpu, target_cpu, bonus_cpu = _logical_ids(3, width, "rematch", edge_values=True)
+    row_span = (width - 1) * column_stride
+    draft, draft_storage = _strided_input(draft_cpu, 64, runner.device, (row_span + 11, column_stride), offset=17)
+    target, target_storage = _strided_input(target_cpu, 64, runner.device, (row_span + 19, column_stride), offset=23)
     bonus, bonus_storage = _strided_input(bonus_cpu, 64, runner.device, (5, 2), offset=19)
     inputs = _Inputs(draft, target, bonus, (draft_storage, target_storage, bonus_storage))
     _check_case(runner, inputs, mask)

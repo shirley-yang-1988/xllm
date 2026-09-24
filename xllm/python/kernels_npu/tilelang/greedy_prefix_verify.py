@@ -20,7 +20,7 @@ from .utils import detect_vec_core_num
 DEFAULT_TASK_COUNT = detect_vec_core_num()
 VEC_NUM = 2
 TILE_IDS = 64
-WINDOW_IDS = 1024
+WINDOW_IDS = TILE_IDS
 GREEDY_PREFIX_VERIFY_PASS_CONFIGS = {
     "tl.ascend_auto_sync": False,
     "tl.ascend_memory_planning": True,
@@ -156,16 +156,7 @@ def build_greedy_prefix_verify_kernel(
                         if target_bits == 64:
                             T.tile.cast(window_i32_ub, target_native_ub, "CAST_NONE", target_span)
                             T.pipe_barrier("v")
-                        # The table has WINDOW_IDS entries; gather only TILE_IDS.
-                        T.call_intrin(
-                            "handle",
-                            tvm.ir.Op.get("tl.ascend_gather"),
-                            full_ub.access_ptr("w"),
-                            window_i32_ub.access_ptr("r"),
-                            offsets_ub.access_ptr("r"),
-                            T.int32(0),
-                            T.int32(TILE_IDS),
-                        )
+                        T.tile.gather(full_ub, window_i32_ub, offsets_ub, 0)
 
                         if mask_enabled != 0:
                             T.set_flag("v", "mte2", 0)
@@ -196,15 +187,7 @@ def build_greedy_prefix_verify_kernel(
                             if draft_bits == 64:
                                 T.tile.cast(window_i32_ub, draft_native_ub, "CAST_NONE", draft_span)
                                 T.pipe_barrier("v")
-                            T.call_intrin(
-                                "handle",
-                                tvm.ir.Op.get("tl.ascend_gather"),
-                                draft_i32_ub.access_ptr("w"),
-                                window_i32_ub.access_ptr("r"),
-                                offsets_ub.access_ptr("r"),
-                                T.int32(0),
-                                T.int32(TILE_IDS),
-                            )
+                            T.tile.gather(draft_i32_ub, window_i32_ub, offsets_ub, 0)
                             T.pipe_barrier("v")
                             T.tile.compare(equal_bits_ub, draft_i32_ub, full_ub, "EQ")
 
