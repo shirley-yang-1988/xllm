@@ -112,6 +112,9 @@ def build_greedy_prefix_verify_kernel(
             draft_i32_ub = T.alloc_ub((TILE_IDS,), "int32")
             offsets_ub = T.alloc_ub((TILE_IDS,), "uint32")
             rejected_ub = T.alloc_ub((TILE_IDS,), "int32")
+            full_u16_ub = T.alloc_ub((TILE_IDS * 2,), "uint16")
+            rejected_u16_ub = T.alloc_ub((TILE_IDS * 2,), "uint16")
+            masked_u16_ub = T.alloc_ub((TILE_IDS * 2,), "uint16")
             equal_bits_ub = T.alloc_ub((TILE_IDS // 8,), "uint8")
             bonus_native_ub = T.alloc_ub((8,), bonus_dtype)
             bonus_i32_ub = T.alloc_ub((8,), "int32")
@@ -219,7 +222,11 @@ def build_greedy_prefix_verify_kernel(
                                     rejected = 1
                         T.set_flag("s", "v", 0)
                         T.wait_flag("s", "v", 0)
-                        T.tile.bitwise_or(masked_ub, full_ub, rejected_ub)
+                        # Or operates on 16-bit lanes; preserve all INT32 bits.
+                        T.reinterpretcast(full_u16_ub, full_ub, "uint16_t")
+                        T.reinterpretcast(rejected_u16_ub, rejected_ub, "uint16_t")
+                        T.reinterpretcast(masked_u16_ub, masked_ub, "uint16_t")
+                        T.tile.bitwise_or(masked_u16_ub, full_u16_ub, rejected_u16_ub)
 
                     T.set_flag("s", "mte3", 0)
                     T.wait_flag("s", "mte3", 0)
