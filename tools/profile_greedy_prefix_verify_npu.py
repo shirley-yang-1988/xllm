@@ -35,6 +35,11 @@ dispatcher, and full output construction/conversion to INT32. Native kernel-only
 output work and are not an equal-contract winner/loser comparison. The caller
 must check the selected card has >2 GB free HBM and utilization 0 before running;
 per-group npu-smi snapshots are retained for interference review, not auto-rated.
+
+For paired revisions, export the baseline builder with git show as the repository
+owner before starting the container runtime. Pass that file as --baseline-source
+alongside its full --baseline-revision. The profiler records the exact source and
+its hash without requiring the runtime identity to access Git metadata.
 """
 
 import argparse
@@ -109,7 +114,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--task-count", type=int, default=DEFAULT_TASK_COUNT)
     parser.add_argument("--kernel-only", action="store_true", help="Profile only the preallocated native F1 kernel")
     parser.add_argument("--compare-task-count", type=int, help="Pair kernel-only runs with another task count")
-    parser.add_argument("--baseline-revision", help="Pair kernel-only runs with the builder from this Git revision")
+    parser.add_argument("--baseline-revision", help="Full Git revision of the exported baseline builder")
+    parser.add_argument("--baseline-source", type=Path, help="Builder exported by git show at baseline-revision")
     parser.add_argument("--profile-dir", type=Path, required=True)
     parser.add_argument(
         "--aot-source", type=Path, help="Optional generated AOT source for a separately identified comparison"
@@ -130,11 +136,15 @@ def _parse_args() -> argparse.Namespace:
             parser.error("compare-task-count must be a positive even INT32 integer")
         if args.compare_task_count == args.task_count:
             parser.error("compare-task-count must differ from task-count")
+    if (args.baseline_revision is None) != (args.baseline_source is None):
+        parser.error("baseline-revision and baseline-source must be supplied together")
     if args.baseline_revision is not None:
         if not args.kernel_only or args.compare_task_count is not None:
             parser.error("baseline-revision requires kernel-only without compare-task-count")
         if len(args.baseline_revision) != 40 or any(c not in "0123456789abcdef" for c in args.baseline_revision):
             parser.error("baseline-revision must be a full lowercase Git commit SHA")
+        if not args.baseline_source.is_file():
+            parser.error("baseline-source must name an existing exported builder")
     max_id = args.id_base + args.batch_size * (args.draft_length + 1)
     if not 0 < args.vocab_size <= torch.iinfo(torch.int32).max + 1 or args.id_base < 0 or max_id >= args.vocab_size:
         parser.error("generated IDs, including mismatches, must lie in the vocabulary and fit in INT32")
@@ -833,14 +843,7 @@ def _main() -> None:
             task_comparison_source = comparison_kernel.get_kernel_source()
         if args.baseline_revision is not None:
             baseline_path = args.profile_dir / "baseline_builder.py"
-            baseline_code = subprocess.check_output(
-                [
-                    "git",
-                    "show",
-                    f"{args.baseline_revision}:xllm/python/kernels_npu/tilelang/greedy_prefix_verify.py",
-                ],
-                cwd=Path(__file__).resolve().parents[1],
-            )
+            baseline_code = args.baseline_source.read_bytes()
             baseline_path.write_bytes(baseline_code)
             module_name = f"xllm.python.kernels_npu.tilelang._baseline_{args.baseline_revision}"
             spec = importlib.util.spec_from_file_location(module_name, baseline_path)
