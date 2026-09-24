@@ -28,6 +28,7 @@ Missing torch_npu, TileLang or an available NPU is an error, never a skipped pas
 from __future__ import annotations
 
 import importlib
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from itertools import product
@@ -361,6 +362,23 @@ def test_kernel_metadata_is_int32(runner: _KernelRunner) -> None:
     buffers = [primitive.buffer_map[parameter] for parameter in primitive.params if str(parameter.dtype) == "handle"]
     assert [str(buffer.dtype) for buffer in buffers] == ["int64", "int64", "int64", "int32", "int32"]
     assert all(str(extent.dtype) == "int32" for buffer in buffers for extent in buffer.shape)
+    for buffer in buffers:
+        for extent in buffer.shape:
+            variables = implementation.tvm.tir.analysis.undefined_vars(extent)
+            assert all(any(variable.same_as(parameter) for parameter in scalar_parameters) for variable in variables)
+
+
+def test_kernel_metadata_generated_abi_is_int32(runner: _KernelRunner) -> None:
+    inputs = _mtp_inputs(*_logical_ids(3, 3, "mixed"), runner.device)
+    source = runner._get_kernel(inputs, task_count=2).get_kernel_source()
+    for function in ("greedy_prefix_verify_kernel", "call"):
+        signature = re.search(rf"\b{function}\s*\(([^)]*)\)\s*\{{", source)
+        assert signature is not None, f"Missing generated {function} definition"
+        parameters = [parameter.strip() for parameter in signature.group(1).split(",")]
+        assert len(parameters) == 14, signature.group(0)
+        for parameter in parameters[5:13]:
+            assert re.fullmatch(r"(?:int32_t|int)\s+\w+", parameter), signature.group(0)
+        assert "int64_t" not in ",".join(parameters[5:13]), signature.group(0)
 
 
 @pytest.mark.parametrize("mask", [True, False], ids=["masked", "full-only"])
