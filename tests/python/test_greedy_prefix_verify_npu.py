@@ -379,6 +379,10 @@ def test_kernel_metadata_generated_abi_is_int32(runner: _KernelRunner) -> None:
         for parameter in parameters[5:13]:
             assert re.fullmatch(r"(?:int32_t|int)\s+\w+", parameter), signature.group(0)
         assert "int64_t" not in ",".join(parameters[5:13]), signature.group(0)
+    gathers = re.findall(r"AscendC::Gather\([^;]+;", source)
+    assert len(gathers) == 2, source
+    assert all(re.search(r",\s*64\s*\);$", gather) for gather in gathers), gathers
+    assert not re.search(r"\(\s*int64_t\s*\)", source), "Generated scalar indices must remain INT32"
 
 
 @pytest.mark.parametrize("mask", [True, False], ids=["masked", "full-only"])
