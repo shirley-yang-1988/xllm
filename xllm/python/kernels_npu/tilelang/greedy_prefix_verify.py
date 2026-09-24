@@ -66,7 +66,7 @@ def build_greedy_prefix_verify_kernel(
             draft_handle,
             (
                 T.Select(
-                    T.all(batch_size > 0, draft_width > 0),
+                    (batch_size > 0) & (draft_width > 0),
                     T.max(batch_size - 1, 0) * draft_stride0 + T.max(draft_width - 1, 0) * draft_stride1 + 1,
                     0,
                 ),
@@ -77,7 +77,7 @@ def build_greedy_prefix_verify_kernel(
             target_handle,
             (
                 T.Select(
-                    T.all(batch_size > 0, draft_width > 0),
+                    (batch_size > 0) & (draft_width > 0),
                     T.max(batch_size - 1, 0) * target_stride0 + T.max(draft_width - 1, 0) * target_stride1 + 1,
                     0,
                 ),
