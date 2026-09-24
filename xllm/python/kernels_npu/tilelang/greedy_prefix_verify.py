@@ -121,6 +121,7 @@ def build_greedy_prefix_verify_kernel(
             bonus_native_ub = T.alloc_ub((8,), bonus_dtype)
             bonus_i32_ub = T.alloc_ub((8,), "int32")
             rejected = T.alloc_var("int32")
+            first_reject = T.alloc_var("int32")
             T.tile.createvecindex(indices_ub, 0)
             T.pipe_barrier("v")
 
@@ -218,15 +219,22 @@ def build_greedy_prefix_verify_kernel(
                     T.set_flag("v", "s", 0)
                     T.wait_flag("v", "s", 0)
                     if mask_enabled != 0:
+                        first_reject = valid_count
+                        if rejected != 0:
+                            first_reject = -1
                         for index in T.serial(valid_count):
-                            # Keep the first rejected target as replacement.
-                            rejected_ub[index] = -rejected
                             if index < target_count:
                                 equal_bit = (equal_bits_ub[index // 8] >> (index % 8)) & 1
                                 if equal_bit == 0:
+                                    first_reject = T.min(first_reject, index)
                                     rejected = 1
                         T.set_flag("s", "v", 0)
                         T.wait_flag("s", "v", 0)
+                        # Keep the first rejected target as replacement.
+                        T.tile.add(rejected_ub, indices_ub, -first_reject)
+                        T.tile.max(rejected_ub, rejected_ub, 0)
+                        T.tile.min(rejected_ub, rejected_ub, 1)
+                        T.tile.mul(rejected_ub, rejected_ub, -1)
                         # Or operates on 16-bit lanes; preserve all INT32 bits.
                         T.reinterpretcast(full_u16_ub, full_ub, "uint16_t")
                         T.reinterpretcast(rejected_u16_ub, rejected_ub, "uint16_t")
