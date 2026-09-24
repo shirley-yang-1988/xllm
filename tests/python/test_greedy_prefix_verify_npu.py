@@ -482,6 +482,14 @@ def test_int64_prefix_patterns(runner: _KernelRunner, rejection: str) -> None:
     _check_case(runner, inputs, mask=True)
 
 
+@pytest.mark.parametrize("first_reject", [7, 8, 15, 16, 63, 64, 65])
+def test_int64_packed_mask_byte_boundaries(runner: _KernelRunner, first_reject: int) -> None:
+    draft, target, bonus = _logical_ids(3, 65, "all", edge_values=True)
+    if first_reject < target.shape[1]:
+        draft[:, first_reject] = target[:, first_reject] ^ 1
+    _check_case(runner, _mtp_inputs(draft, target, bonus, runner.device), mask=True)
+
+
 @pytest.mark.parametrize(("batch", "width"), [(3, 65), (49, 64), (97, 129)])
 @pytest.mark.parametrize("mask", [True, False])
 def test_default_task_boundary_subset(runner: _KernelRunner, batch: int, width: int, mask: bool) -> None:
