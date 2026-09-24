@@ -35,6 +35,9 @@ dispatcher, and full output construction/conversion to INT32. Native kernel-only
 output work and are not an equal-contract winner/loser comparison. The caller
 must check the selected card has >2 GB free HBM and utilization 0 before running;
 per-group npu-smi snapshots are retained for interference review, not auto-rated.
+--pipe-utilization enables msprof hardware pipeline counters through torch_npu.
+Those captures are diagnostic, not the uninstrumented duration acceptance run;
+pipeline busy times overlap and must not be added to reconstruct kernel duration.
 
 For paired revisions, export the baseline builder with git show as the repository
 owner before starting the container runtime. Pass that file as --baseline-source
@@ -102,6 +105,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup", type=int, default=100)
     parser.add_argument("--groups", type=int, default=3)
     parser.add_argument("--collect-intervals", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--pipe-utilization", action="store_true", help="Collect diagnostic msprof pipeline counters")
     parser.add_argument("--samples", type=int, default=100, help="Supplementary interval samples per paired group")
     parser.add_argument("--amortized-calls", type=int, default=100)
     parser.add_argument("--compare-triton", action=argparse.BooleanOptionalAction, default=False)
@@ -434,11 +438,20 @@ def _capture_device_profile(
     torch.npu.synchronize()
     directory.mkdir(parents=True, exist_ok=False)
     label = operation.name + ("/reset_only" if reset_only else "/with_required_reset")
+    experimental_config = None
+    if args.pipe_utilization:
+        experimental_config = torch_npu.profiler._ExperimentalConfig(
+            profiler_level=torch_npu.profiler.ProfilerLevel.Level1,
+            aic_metrics=torch_npu.profiler.AiCMetrics.PipeUtilization,
+            data_simplification=False,
+            export_type=torch_npu.profiler.ExportType.Text,
+        )
     with torch_npu.profiler.profile(
         activities=[torch_npu.profiler.ProfilerActivity.CPU, torch_npu.profiler.ProfilerActivity.NPU],
         schedule=torch_npu.profiler.schedule(wait=0, warmup=1, active=args.iterations, repeat=1),
         record_shapes=False,
         profile_memory=False,
+        experimental_config=experimental_config,
         on_trace_ready=torch_npu.profiler.tensorboard_trace_handler(str(directory)),
     ) as profiler:
         for step in range(args.iterations + 1):
@@ -491,6 +504,8 @@ def _collect_device_profiles(
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "metric": "NPU profiler kernel_details.csv Duration(us)",
+        "hardware_metrics": "PipeUtilization" if args.pipe_utilization else "None",
+        "duration_acceptance_eligible": not args.pipe_utilization,
         "sampling_meets_plan_minimum": args.warmup >= 100 and args.groups >= 3 and args.iterations >= 100,
         "scope": "Python callables only; native output work differs, complete adapters share full/optional-masked contract.",
         "interference": "UNREVIEWED: inspect per-group npu-smi snapshots before drawing performance conclusions.",
@@ -930,6 +945,13 @@ def _main() -> None:
         "native_reset": "Separate reset-only identity trace; exclude matching reset records from actual combined trace",
         "scope": "Not C++ AOT/registry or MTP integration. Candidate input conversion runs in UB; outputs are INT32.",
         "collect_intervals": args.collect_intervals,
+        "hardware_metrics": "PipeUtilization" if args.pipe_utilization else "None",
+        "hardware_metrics_scope": (
+            "Diagnostic msprof Level1 capture; pipeline times overlap, inspect raw AIV/AIC counter exports."
+            if args.pipe_utilization
+            else "No hardware counter group requested."
+        ),
+        "duration_acceptance_eligible": not args.pipe_utilization,
         "timing_file": "timings.json" if args.collect_intervals else None,
         "triton_reference": triton_metadata,
         "native_kernel_scope": "Unequal output work: Triton writes only valid masked positions; TileLang writes full+masked.",
