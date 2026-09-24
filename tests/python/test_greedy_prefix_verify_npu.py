@@ -322,7 +322,9 @@ def _assert_pair(
             assert result is not None, f"{context} {name} is missing"
             assert result.device.type == "npu", f"{context} {name} is not on NPU"
             assert result.dtype == torch.int32, f"{context} {name} has dtype {result.dtype}"
-            torch.testing.assert_close(result.cpu(), reference, rtol=0, atol=0, msg=f"{context} {name}")
+            torch.testing.assert_close(
+                result.cpu(), reference, rtol=0, atol=0, msg=lambda detail, name=name: f"{context} {name}\n{detail}"
+            )
 
 
 def _assert_canaries(outputs: _Outputs, context: str) -> None:
@@ -430,6 +432,9 @@ def test_smoke_empty_batch_no_launch(runner: _KernelRunner, width: int, mask: bo
         (1, 1, "last"),
         (3, 3, "all"),
         (17, 7, "rematch"),
+        (1, 31, "middle"),
+        (1, 32, "middle"),
+        (1, 33, "middle"),
         (49, 63, "middle"),
         (97, 64, "first"),
         (3, 65, "last"),
