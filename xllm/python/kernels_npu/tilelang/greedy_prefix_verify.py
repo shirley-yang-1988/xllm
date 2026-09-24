@@ -130,7 +130,6 @@ def build_greedy_prefix_verify_kernel(
                 for tile in T.serial(draft_width // ids_per_tile + 1):
                     col_start = tile * ids_per_tile
                     valid_count = T.min(ids_per_tile, draft_width + 1 - col_start)
-                    target_count = T.alloc_var("int32")
                     target_count = T.min(
                         T.int32(TILE_IDS), T.max(T.int32(0), T.min(valid_count, draft_width - col_start))
                     )
