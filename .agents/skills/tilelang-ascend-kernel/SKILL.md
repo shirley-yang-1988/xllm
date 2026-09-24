@@ -53,6 +53,23 @@ Default to Expert mode for xLLM Ascend kernels:
 - do not introduce Developer mode `T.Parallel` unless the kernel is a clearly tile-local element-wise expression and the change does not reduce control over UB usage, temporary buffers, or exact runtime semantics
 - when translating Triton kernels, preserve the Triton runtime semantics first, then choose the smallest Expert-mode lowering that matches them
 
+## Synchronization: Same Queue vs Cross Pipeline
+
+- **Tasks in the same Vector unit task queue execute in order; data dependencies between those tasks do not require `T.pipe_barrier("v")`.** Do not insert a barrier after each vector operation merely because the next operation consumes its result.
+- **The same rule applies within an MTE2 task queue and within an MTE3 task queue.** Do not add `T.pipe_barrier("mte2")` or `T.pipe_barrier("mte3")` solely for dependencies between ordered tasks in that same queue.
+- For example, an elementwise vector mask chain needs no intermediate `PIPE_V` barriers:
+
+  ```python
+  T.tile.add(mask_ub, indices_ub, -first_reject)
+  T.tile.max(mask_ub, mask_ub, 0)
+  T.tile.min(mask_ub, mask_ub, 1)
+  T.tile.mul(mask_ub, mask_ub, -1)
+  ```
+
+- **Cross-pipeline dependencies are different.** Preserve the appropriate producer/consumer `T.set_flag` / `T.wait_flag` synchronization for MTE2→V input readiness, V→MTE3 output readiness, scalar/UB access, and buffer reuse. Ordering inside one queue does not synchronize another pipeline, another core, or another queue.
+- Identify the actual execution pipeline from the lowered operations rather than treating all `T.copy` or all `T.tile.*` calls as interchangeable. Any additional barrier must have a concrete synchronization requirement; neither a generic RAW/WAR label nor `auto_sync=False` alone justifies inserting one.
+- When optimizing synchronization, keep the computation and unrelated flags unchanged, check generated Ascend-C, and validate numerical results plus device duration and msprof pipeline metrics. If a vectorized candidate also adds barriers, do not attribute its measured regression to vector arithmetic alone; isolate the barrier change.
+
 ## Common Triton To TileLang-Ascend Semantics
 
 Use this table as the quick semantic mapping when translating Triton kernels:
