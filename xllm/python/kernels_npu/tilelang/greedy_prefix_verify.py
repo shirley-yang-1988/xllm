@@ -219,7 +219,9 @@ def build_greedy_prefix_verify_kernel(
                     T.set_flag("v", "s", 0)
                     T.wait_flag("v", "s", 0)
                     if mask_enabled != 0:
-                        first_reject = T.if_then_else(rejected != 0, -1, valid_count)
+                        first_reject = valid_count
+                        if rejected != 0:
+                            first_reject = -1
                         for index in T.serial(valid_count):
                             if index < target_count:
                                 equal_bit = (equal_bits_ub[index // 8] >> (index % 8)) & 1
