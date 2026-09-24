@@ -71,9 +71,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from scripts.logger import logger
 from tools.greedy_prefix_verify_triton_reference import TritonGreedyReference
 from xllm.python.kernels_npu.tilelang.greedy_prefix_verify import (
-    DEFAULT_TASK_COUNT,
     GREEDY_PREFIX_VERIFY_PASS_CONFIGS,
     build_greedy_prefix_verify_kernel,
+    select_greedy_prefix_verify_task_count,
 )
 
 _INT32_MAX = (1 << 31) - 1
@@ -115,7 +115,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--triton-native-dtype", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--metadata-policy", choices=("cached", "per-call"), default="cached")
     parser.add_argument("--device", type=int, default=0)
-    parser.add_argument("--task-count", type=int, default=DEFAULT_TASK_COUNT)
+    parser.add_argument("--task-count", type=int, help="Override the default batch-aware even Vector task count")
     parser.add_argument("--kernel-only", action="store_true", help="Profile only the preallocated native F1 kernel")
     parser.add_argument("--compare-task-count", type=int, help="Pair kernel-only runs with another task count")
     parser.add_argument("--baseline-revision", help="Full Git revision of the exported baseline builder")
@@ -129,6 +129,11 @@ def _parse_args() -> argparse.Namespace:
         parser.error("batch-size and draft-length must be nonnegative")
     if min(args.iterations, args.groups, args.samples, args.amortized_calls) <= 0 or args.warmup < 0 or args.device < 0:
         parser.error("iterations/groups/samples/amortized-calls must be positive; warmup/device must be nonnegative")
+    args.task_count_policy = "batch-aware" if args.task_count is None else "explicit"
+    if args.task_count is None:
+        if args.batch_size > _INT32_MAX:
+            parser.error("batch-size must fit nonnegative INT32")
+        args.task_count = select_greedy_prefix_verify_task_count(args.batch_size)
     if not 0 < args.task_count <= _INT32_MAX or args.task_count % 2 != 0:
         parser.error("task-count must be a positive even INT32 integer")
     if args.kernel_only and (args.compare_triton or args.collect_intervals):
@@ -966,6 +971,7 @@ def _main() -> None:
         "ascend_home_path": os.environ.get("ASCEND_HOME_PATH"),
         "pass_configs": GREEDY_PREFIX_VERIFY_PASS_CONFIGS,
         "task_count": args.task_count,
+        "task_count_policy": args.task_count_policy,
         "kernel_only": args.kernel_only,
         "task_comparison": task_comparison,
         "baseline": baseline_metadata,

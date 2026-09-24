@@ -29,8 +29,18 @@ GREEDY_PREFIX_VERIFY_PASS_CONFIGS = {
 }
 
 
+def select_greedy_prefix_verify_task_count(batch_size: int, vec_core_num: int = DEFAULT_TASK_COUNT) -> int:
+    """Select an even row grid; callers skip the launch for an empty batch."""
+    if not 0 <= batch_size <= (1 << 31) - 1:
+        raise ValueError(f"batch_size must fit nonnegative int32, got {batch_size}")
+    if not 0 < vec_core_num <= (1 << 31) - 1 or vec_core_num % VEC_NUM != 0:
+        raise ValueError(f"vec_core_num must fit positive int32 and be divisible by {VEC_NUM}, got {vec_core_num}")
+    aligned_rows = max(VEC_NUM, ((batch_size + VEC_NUM - 1) // VEC_NUM) * VEC_NUM)
+    return min(aligned_rows, vec_core_num)
+
+
 def build_greedy_prefix_verify_kernel(
-    task_count: int = DEFAULT_TASK_COUNT,
+    task_count: int,
     draft_bits: int = 64,
     target_bits: int = 64,
     bonus_bits: int = 64,
