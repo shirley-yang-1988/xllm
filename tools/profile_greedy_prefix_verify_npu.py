@@ -15,11 +15,9 @@
 
 """Profile the test-only callable of the F1 builder with native integer inputs.
 
-Run only through the checkout's source-synchronizing wrapper in the authorized
-910c-27 NPU container, using a background fork. Creating the callable can compile
-TileLang code and must be covered by the approved build/test entrypoint; this
-script is not an alternative build workflow. Compilation, input construction,
-correctness checks and initial warmup are outside the active profile interval.
+Run in the selected NPU container from the exact Git commit pushed for testing,
+using a background fork. Compilation, input construction, correctness checks
+and initial warmup are outside the active profile interval.
 Shapes, strides and relative spans use checked INT32 indices; native token inputs
 remain INT32/INT64 and are never narrowed by the launch adapter.
 
