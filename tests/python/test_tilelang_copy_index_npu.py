@@ -14,7 +14,7 @@
 
 """Lower-only Ascend copy regression for the INT32 indexing contract.
 
-Run in the authorized container through the source-synchronizing test workflow.
+Run in the selected NPU container from the exact Git commit pushed for testing.
 No F1/utils imports, torch_npu initialization, JIT compilation or device launch.
 The earlier INT32/INT64 comparison is retained in the frozen probe evidence;
 INT64 indexing is no longer part of the F1 contract. Successful lowering is not
