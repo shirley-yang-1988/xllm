@@ -111,6 +111,8 @@ def build_greedy_prefix_verify_kernel(
             masked_ub = T.alloc_ub((TILE_IDS,), "int32")
             draft_i32_ub = T.alloc_ub((TILE_IDS,), "int32")
             offsets_ub = T.alloc_ub((TILE_IDS,), "uint32")
+            indices_ub = T.alloc_ub((TILE_IDS,), "int32")
+            offsets_i32_ub = T.alloc_ub((TILE_IDS,), "int32")
             rejected_ub = T.alloc_ub((TILE_IDS,), "int32")
             full_u16_ub = T.alloc_ub((TILE_IDS * 2,), "uint16")
             rejected_u16_ub = T.alloc_ub((TILE_IDS * 2,), "uint16")
@@ -119,6 +121,8 @@ def build_greedy_prefix_verify_kernel(
             bonus_native_ub = T.alloc_ub((8,), bonus_dtype)
             bonus_i32_ub = T.alloc_ub((8,), "int32")
             rejected = T.alloc_var("int32")
+            T.tile.createvecindex(indices_ub, 0)
+            T.pipe_barrier("v")
 
             for row_local in T.serial(valid_rows):
                 row = row_start + row_local
@@ -147,11 +151,14 @@ def build_greedy_prefix_verify_kernel(
                                 target[target_offset : target_offset + target_span],
                                 window_i32_ub,
                             )
-                        for index in T.serial(TILE_IDS):
-                            if index < target_count:
-                                offsets_ub[index] = T.Cast("uint32", index * target_stride1 * 4)
-                            else:
-                                offsets_ub[index] = T.uint32(0)
+                        # Padded lanes reuse the last valid ID within the window.
+                        T.tile.min(offsets_i32_ub, indices_ub, target_count - 1)
+                        T.pipe_barrier("v")
+                        T.tile.mul(offsets_i32_ub, offsets_i32_ub, target_stride1)
+                        T.pipe_barrier("v")
+                        T.tile.mul(offsets_i32_ub, offsets_i32_ub, 4)
+                        T.pipe_barrier("v")
+                        T.reinterpretcast(offsets_ub, offsets_i32_ub, "uint32_t")
                         T.set_flag("mte2", "v", 0)
                         T.wait_flag("mte2", "v", 0)
                         T.set_flag("s", "v", 0)
@@ -178,11 +185,13 @@ def build_greedy_prefix_verify_kernel(
                                     draft[draft_offset : draft_offset + draft_span],
                                     window_i32_ub,
                                 )
-                            for index in T.serial(TILE_IDS):
-                                if index < target_count:
-                                    offsets_ub[index] = T.Cast("uint32", index * draft_stride1 * 4)
-                                else:
-                                    offsets_ub[index] = T.uint32(0)
+                            T.tile.min(offsets_i32_ub, indices_ub, target_count - 1)
+                            T.pipe_barrier("v")
+                            T.tile.mul(offsets_i32_ub, offsets_i32_ub, draft_stride1)
+                            T.pipe_barrier("v")
+                            T.tile.mul(offsets_i32_ub, offsets_i32_ub, 4)
+                            T.pipe_barrier("v")
+                            T.reinterpretcast(offsets_ub, offsets_i32_ub, "uint32_t")
                             T.set_flag("mte2", "v", 0)
                             T.wait_flag("mte2", "v", 0)
                             T.set_flag("s", "v", 0)
