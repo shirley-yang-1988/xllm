@@ -102,6 +102,7 @@ class _KernelRunner:
         implementation = importlib.import_module("xllm.python.kernels_npu.tilelang.greedy_prefix_verify")
         self.device = device
         self.default_task_count = implementation.DEFAULT_TASK_COUNT
+        self._select_task_count = implementation.select_greedy_prefix_verify_task_count
         self.launch_count = 0
         self.output_allocation_count = 0
         self._kernels: dict[tuple[int, int, int, int], Any] = {}
@@ -124,8 +125,10 @@ class _KernelRunner:
         self.output_allocation_count += 1
         return storage[_GUARD_SIZE : _GUARD_SIZE + size].view(shape), storage
 
-    def _run(self, inputs: _Inputs, mask: bool, task_count: int = 2) -> _Outputs:
+    def _run(self, inputs: _Inputs, mask: bool, task_count: int | None = None) -> _Outputs:
         batch, width = inputs.target.shape
+        if task_count is None:
+            task_count = self._select_task_count(batch)
         flat_inputs = tuple(_flat_storage_view(tensor) for tensor in (inputs.draft, inputs.target, inputs.bonus))
         full, full_storage = self._allocate_output((batch, width + 1))
         masked = None
@@ -335,7 +338,9 @@ def _assert_canaries(outputs: _Outputs, context: str) -> None:
         torch.testing.assert_close(snapshot[-_GUARD_SIZE:], expected, rtol=0, atol=0, msg=f"{context} suffix {index}")
 
 
-def _check_case(runner: _KernelRunner, inputs: _Inputs, mask: bool, task_count: int = 2) -> _Outputs:
+def _check_case(runner: _KernelRunner, inputs: _Inputs, mask: bool, task_count: int | None = None) -> _Outputs:
+    if task_count is None:
+        task_count = runner._select_task_count(inputs.target.shape[0])
     context = _context(inputs, mask, task_count)
     logger.info(f"F1 Python precision: {context}")
     snapshots = tuple(storage.cpu() for storage in inputs.storages)
@@ -353,6 +358,30 @@ def _check_case(runner: _KernelRunner, inputs: _Inputs, mask: bool, task_count: 
     for index, (storage, snapshot) in enumerate(zip(inputs.storages, snapshots)):
         torch.testing.assert_close(storage.cpu(), snapshot, rtol=0, atol=0, msg=f"{context} input storage {index}")
     return outputs
+
+
+@pytest.mark.parametrize(
+    ("batch", "cores", "expected"),
+    [(0, 48, 2), (1, 48, 2), (2, 48, 2), (3, 48, 4), (47, 48, 48), (48, 48, 48), (97, 48, 48), (3, 2, 2)],
+)
+def test_batch_aware_task_count(runner: _KernelRunner, batch: int, cores: int, expected: int) -> None:
+    assert runner._select_task_count(batch, cores) == expected
+
+
+@pytest.mark.parametrize(("batch", "cores"), [(-1, 48), (_INT32_MAX + 1, 48), (1, 0), (1, 3), (1, _INT32_MAX + 1)])
+def test_batch_aware_task_count_rejects_invalid(runner: _KernelRunner, batch: int, cores: int) -> None:
+    with pytest.raises(ValueError):
+        runner._select_task_count(batch, cores)
+
+
+@pytest.mark.parametrize("batch", [1, 3])
+def test_batch_aware_task_count_numerical(runner: _KernelRunner, batch: int) -> None:
+    inputs = _mtp_inputs(*_logical_ids(batch, 3, "mixed"), runner.device)
+    expected = _semantic_oracle(inputs.draft.cpu(), inputs.target.cpu(), inputs.bonus.cpu(), True)
+    outputs = runner._run(inputs, mask=True)
+    context = _context(inputs, True, runner._select_task_count(batch))
+    _assert_pair((outputs.full, outputs.masked), expected, context)
+    _assert_canaries(outputs, context)
 
 
 def test_kernel_metadata_is_int32(runner: _KernelRunner) -> None:
@@ -543,7 +572,7 @@ def test_int64_current_nondefault_stream(runner: _KernelRunner) -> None:
         # separates the input updates, the kernel, and the output consumers.
         for destination, source in zip((inputs.draft, inputs.target, inputs.bonus), staged):
             destination.copy_(source)
-        outputs = runner._run(inputs, mask=True)
+        outputs = runner._run(inputs, mask=True, task_count=2)
         assert outputs.masked is not None
         consumed = (outputs.full.clone(), outputs.masked.clone())
         reference = _torch_reference(inputs, mask=True)
