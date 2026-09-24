@@ -40,6 +40,7 @@ per-group npu-smi snapshots are retained for interference review, not auto-rated
 import argparse
 import csv
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -108,6 +109,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--task-count", type=int, default=DEFAULT_TASK_COUNT)
     parser.add_argument("--kernel-only", action="store_true", help="Profile only the preallocated native F1 kernel")
     parser.add_argument("--compare-task-count", type=int, help="Pair kernel-only runs with another task count")
+    parser.add_argument("--baseline-revision", help="Pair kernel-only runs with the builder from this Git revision")
     parser.add_argument("--profile-dir", type=Path, required=True)
     parser.add_argument(
         "--aot-source", type=Path, help="Optional generated AOT source for a separately identified comparison"
@@ -128,6 +130,11 @@ def _parse_args() -> argparse.Namespace:
             parser.error("compare-task-count must be a positive even INT32 integer")
         if args.compare_task_count == args.task_count:
             parser.error("compare-task-count must differ from task-count")
+    if args.baseline_revision is not None:
+        if not args.kernel_only or args.compare_task_count is not None:
+            parser.error("baseline-revision requires kernel-only without compare-task-count")
+        if len(args.baseline_revision) != 40 or any(c not in "0123456789abcdef" for c in args.baseline_revision):
+            parser.error("baseline-revision must be a full lowercase Git commit SHA")
     max_id = args.id_base + args.batch_size * (args.draft_length + 1)
     if not 0 < args.vocab_size <= torch.iinfo(torch.int32).max + 1 or args.id_base < 0 or max_id >= args.vocab_size:
         parser.error("generated IDs, including mismatches, must lie in the vocabulary and fit in INT32")
@@ -670,6 +677,7 @@ def _collect_timings(
 
 def _main() -> None:
     args = _parse_args()
+    args.profile_dir.mkdir(parents=True, exist_ok=False)
     torch.npu.set_device(args.device)
     inputs = _make_inputs(args)
     input_snapshots = [(tensor, tensor.cpu().clone()) for tensor in (inputs.draft, inputs.target, inputs.bonus)]
@@ -798,6 +806,7 @@ def _main() -> None:
                 operations.append(native)
 
     task_comparison_source = None
+    baseline_source = None
     if args.kernel_only:
         operations = [fixed_candidate]
         pairs = []
@@ -822,6 +831,45 @@ def _main() -> None:
             operations.append(comparison)
             pairs.append(("task_count_same_contract", fixed_candidate, comparison))
             task_comparison_source = comparison_kernel.get_kernel_source()
+        if args.baseline_revision is not None:
+            baseline_path = args.profile_dir / "baseline_builder.py"
+            baseline_code = subprocess.check_output(
+                [
+                    "git",
+                    "show",
+                    f"{args.baseline_revision}:xllm/python/kernels_npu/tilelang/greedy_prefix_verify.py",
+                ],
+                cwd=Path(__file__).resolve().parents[1],
+            )
+            baseline_path.write_bytes(baseline_code)
+            module_name = f"xllm.python.kernels_npu.tilelang._baseline_{args.baseline_revision}"
+            spec = importlib.util.spec_from_file_location(module_name, baseline_path)
+            if spec is None or spec.loader is None:
+                raise RuntimeError(f"Cannot load recorded baseline builder from {baseline_path}")
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            spec.loader.exec_module(module)
+            baseline_factory = tilelang.jit(pass_configs=module.GREEDY_PREFIX_VERIFY_PASS_CONFIGS)(
+                module.build_greedy_prefix_verify_kernel
+            )
+            baseline_kernel = baseline_factory(
+                task_count=args.task_count,
+                draft_bits=args.draft_bits,
+                target_bits=args.target_bits,
+                bonus_bits=args.bonus_bits,
+            )
+            baseline_outputs = _allocate_outputs(inputs, args.mask)
+            baseline_arguments = _kernel_args(inputs, *baseline_outputs)
+
+            def launch_baseline() -> tuple[torch.Tensor, torch.Tensor | None]:
+                if args.batch_size != 0:
+                    baseline_kernel(*baseline_arguments)
+                return baseline_outputs
+
+            baseline = _Operation("tilelang_baseline_kernel", launch_baseline, check_full_masked)
+            operations.append(baseline)
+            pairs.append(("revision_same_contract", baseline, fixed_candidate))
+            baseline_source = baseline_kernel.get_kernel_source()
 
     for operation in operations:
         if operation.reset is not None:
@@ -839,8 +887,18 @@ def _main() -> None:
     source_root = Path(__file__).resolve().parents[1]
     builder_path = source_root / "xllm/python/kernels_npu/tilelang/greedy_prefix_verify.py"
     descriptor_path = source_root / "xllm/compiler/tilelang/targets/ascend/aot/greedy_prefix_verify.py"
-    args.profile_dir.mkdir(parents=True, exist_ok=False)
     (args.profile_dir / "python-kernel.cpp").write_text(generated_source, encoding="utf-8")
+    baseline_metadata = None
+    if baseline_source is not None:
+        baseline_kernel_path = args.profile_dir / "python-baseline-kernel.cpp"
+        baseline_kernel_path.write_text(baseline_source, encoding="utf-8")
+        baseline_metadata = {
+            "revision": args.baseline_revision,
+            "builder_sha256": hashlib.sha256(baseline_code).hexdigest(),
+            "generated_path": str(baseline_kernel_path),
+            "generated_sha256": hashlib.sha256(baseline_source.encode()).hexdigest(),
+            "task_count": args.task_count,
+        }
     task_comparison = None
     if task_comparison_source is not None:
         comparison_path = args.profile_dir / "python-task-comparison.cpp"
@@ -885,6 +943,7 @@ def _main() -> None:
         "task_count": args.task_count,
         "kernel_only": args.kernel_only,
         "task_comparison": task_comparison,
+        "baseline": baseline_metadata,
         "input_bits": {"draft": args.draft_bits, "target": args.target_bits, "bonus": args.bonus_bits},
         "index_dtype": "int32",
         "index_validation": "Nonnegative shapes/strides and relative physical spans fit signed INT32; no narrowing casts.",
