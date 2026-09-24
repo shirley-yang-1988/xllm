@@ -28,11 +28,6 @@ GREEDY_PREFIX_VERIFY_PASS_CONFIGS = {
     "tl.ascend_auto_cv_combine": False,
 }
 
-DRAFT_SPAN = T.symbolic("draft_span", "int32")
-TARGET_SPAN = T.symbolic("target_span", "int32")
-BONUS_SPAN = T.symbolic("bonus_span", "int32")
-OUTPUT_SPAN = T.symbolic("output_span", "int32")
-
 
 def build_greedy_prefix_verify_kernel(
     task_count: int = DEFAULT_TASK_COUNT,
@@ -51,11 +46,11 @@ def build_greedy_prefix_verify_kernel(
 
     @T.prim_func
     def greedy_prefix_verify(
-        draft: T.Tensor((DRAFT_SPAN,), draft_dtype),
-        target: T.Tensor((TARGET_SPAN,), target_dtype),
-        bonus: T.Tensor((BONUS_SPAN,), bonus_dtype),
-        full: T.Tensor((OUTPUT_SPAN,), "int32"),
-        masked: T.Tensor((OUTPUT_SPAN,), "int32"),
+        draft_handle: T.handle,
+        target_handle: T.handle,
+        bonus_handle: T.handle,
+        full_handle: T.handle,
+        masked_handle: T.handle,
         batch_size: T.int32,
         draft_width: T.int32,
         draft_stride0: T.int32,
@@ -65,6 +60,37 @@ def build_greedy_prefix_verify_kernel(
         bonus_stride0: T.int32,
         mask_enabled: T.int32,
     ):
+        # Exact shape expressions use the explicit INT32 metadata, avoiding
+        # inferred shape variables that the Ascend ABI declares as INT64.
+        draft = T.match_buffer(
+            draft_handle,
+            (
+                T.Select(
+                    T.all(batch_size > 0, draft_width > 0),
+                    T.max(batch_size - 1, 0) * draft_stride0 + T.max(draft_width - 1, 0) * draft_stride1 + 1,
+                    0,
+                ),
+            ),
+            draft_dtype,
+        )
+        target = T.match_buffer(
+            target_handle,
+            (
+                T.Select(
+                    T.all(batch_size > 0, draft_width > 0),
+                    T.max(batch_size - 1, 0) * target_stride0 + T.max(draft_width - 1, 0) * target_stride1 + 1,
+                    0,
+                ),
+            ),
+            target_dtype,
+        )
+        bonus = T.match_buffer(
+            bonus_handle,
+            (T.Select(batch_size > 0, T.max(batch_size - 1, 0) * bonus_stride0 + 1, 0),),
+            bonus_dtype,
+        )
+        full = T.match_buffer(full_handle, (batch_size * (draft_width + 1),), "int32")
+        masked = T.match_buffer(masked_handle, (batch_size * (draft_width + 1),), "int32")
         with T.Kernel(task_count // VEC_NUM, is_npu=True) as (cid, vid):
             task_id = cid * VEC_NUM + vid
             rows_per_task = batch_size // task_count
