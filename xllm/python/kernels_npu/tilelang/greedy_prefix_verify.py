@@ -161,8 +161,6 @@ def build_greedy_prefix_verify_kernel(
                         T.reinterpretcast(offsets_ub, offsets_i32_ub, "uint32_t")
                         T.set_flag("mte2", "v", 0)
                         T.wait_flag("mte2", "v", 0)
-                        T.set_flag("s", "v", 0)
-                        T.wait_flag("s", "v", 0)
                         if target_bits == 64:
                             T.tile.cast(window_i32_ub, target_native_ub, "CAST_NONE", target_span)
                             T.pipe_barrier("v")
@@ -194,8 +192,6 @@ def build_greedy_prefix_verify_kernel(
                             T.reinterpretcast(offsets_ub, offsets_i32_ub, "uint32_t")
                             T.set_flag("mte2", "v", 0)
                             T.wait_flag("mte2", "v", 0)
-                            T.set_flag("s", "v", 0)
-                            T.wait_flag("s", "v", 0)
                             if draft_bits == 64:
                                 T.tile.cast(window_i32_ub, draft_native_ub, "CAST_NONE", draft_span)
                                 T.pipe_barrier("v")
