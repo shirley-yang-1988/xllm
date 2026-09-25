@@ -21,10 +21,17 @@ limitations under the License.
 #include <glog/logging.h>
 #include <torch/torch.h>
 
+#include <limits>
 #include <optional>
 
 #include "kernels/ops_api.h"
 #include "sampler.h"
+
+#if defined(USE_NPU)
+#include <c10/core/DeviceType.h>
+
+#include "core/kernels/npu/tilelang/tilelang_ops_api.h"
+#endif
 
 namespace xllm {
 
@@ -190,9 +197,9 @@ SampleOutput RejectionSampler::forward(const DraftProposal& draft_proposal,
     auto target_logprobs = torch::log_softmax(
         target_logits, /*dim=*/-1, /*dtype=*/torch::kFloat32);
 
-    // select the logprobs for each sequence
-    const auto selected_logprobs =
-        index_select_2d(target_logprobs, /*dim=*/-1, accepted_token_ids);
+    // Gather requires Long indices; keep the sampled token payload unchanged.
+    const auto selected_logprobs = index_select_2d(
+        target_logprobs, /*dim=*/-1, accepted_token_ids.to(torch::kLong));
     // output.probs = selected_probs;
     output.logprobs = selected_logprobs;
 
@@ -346,6 +353,15 @@ std::tuple<torch::Tensor, torch::Tensor> RejectionSampler::greedy_sample(
     const torch::Tensor& target_scores,
     const torch::Tensor& bonus_token_ids,
     bool mask_out_rejected_tokens) {
+#if defined(USE_NPU)
+  const bool use_npu =
+      target_scores.device().type() == c10::DeviceType::PrivateUse1;
+  if (use_npu) {
+    CHECK_LE(target_scores.size(-1),
+             static_cast<int64_t>(std::numeric_limits<int32_t>::max()) + 1)
+        << "NPU greedy verification requires token IDs representable as int32";
+  }
+#endif
   torch::Tensor target_token_ids = Sampler::greedy_sample(target_scores);
   return greedy_sample_from_token_ids(draft_token_ids,
                                       target_token_ids,
@@ -361,6 +377,15 @@ RejectionSampler::greedy_sample_from_token_ids(
     bool mask_out_rejected_tokens) {
   CHECK_EQ(target_token_ids.sizes(), draft_token_ids.sizes())
       << "target and draft token shapes must match";
+#if defined(USE_NPU)
+  if (target_token_ids.device().type() == c10::DeviceType::PrivateUse1) {
+    return kernel::npu::tilelang::greedy_prefix_verify(
+        draft_token_ids,
+        target_token_ids,
+        bonus_token_ids,
+        mask_out_rejected_tokens);
+  }
+#endif
   // [batch_size, n_speculative_tokens + 1]
   torch::Tensor accepted_token_ids =
       torch::cat({target_token_ids, bonus_token_ids}, /*dim=*/-1);
