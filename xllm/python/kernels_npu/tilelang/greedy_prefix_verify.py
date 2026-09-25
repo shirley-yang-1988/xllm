@@ -134,6 +134,7 @@ def build_greedy_prefix_verify_kernel(
             first_reject = T.alloc_var("int32")
             equal_byte = T.alloc_var("int32")
             T.tile.createvecindex(indices_ub, 0)
+            T.pipe_barrier("v")
 
             for row_local in T.serial(valid_rows):
                 row = row_start + row_local
@@ -164,13 +165,17 @@ def build_greedy_prefix_verify_kernel(
                             )
                         # Padded lanes reuse the last valid ID within the window.
                         T.tile.min(offsets_i32_ub, indices_ub, target_count - 1)
+                        T.pipe_barrier("v")
                         T.tile.mul(offsets_i32_ub, offsets_i32_ub, target_stride1)
+                        T.pipe_barrier("v")
                         T.tile.mul(offsets_i32_ub, offsets_i32_ub, 4)
+                        T.pipe_barrier("v")
                         T.reinterpretcast(offsets_ub, offsets_i32_ub, "uint32_t")
                         T.set_flag("mte2", "v", 0)
                         T.wait_flag("mte2", "v", 0)
                         if target_bits == 64:
                             T.tile.cast(window_i32_ub, target_native_ub, "CAST_NONE", target_span)
+                            T.pipe_barrier("v")
                         T.tile.gather(full_ub, window_i32_ub, offsets_ub, 0)
 
                         if mask_enabled != 0:
@@ -191,14 +196,19 @@ def build_greedy_prefix_verify_kernel(
                                     window_i32_ub,
                                 )
                             T.tile.min(offsets_i32_ub, indices_ub, target_count - 1)
+                            T.pipe_barrier("v")
                             T.tile.mul(offsets_i32_ub, offsets_i32_ub, draft_stride1)
+                            T.pipe_barrier("v")
                             T.tile.mul(offsets_i32_ub, offsets_i32_ub, 4)
+                            T.pipe_barrier("v")
                             T.reinterpretcast(offsets_ub, offsets_i32_ub, "uint32_t")
                             T.set_flag("mte2", "v", 0)
                             T.wait_flag("mte2", "v", 0)
                             if draft_bits == 64:
                                 T.tile.cast(window_i32_ub, draft_native_ub, "CAST_NONE", draft_span)
+                                T.pipe_barrier("v")
                             T.tile.gather(draft_i32_ub, window_i32_ub, offsets_ub, 0)
+                            T.pipe_barrier("v")
                             T.tile.compare(equal_bits_ub, draft_i32_ub, full_ub, "EQ")
 
                     if target_count < valid_count:
