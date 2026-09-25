@@ -163,20 +163,25 @@ def build_greedy_prefix_verify_kernel(
                                 target[target_offset : target_offset + target_span],
                                 window_i32_ub,
                             )
-                        # Padded lanes reuse the last valid ID within the window.
-                        T.tile.min(offsets_i32_ub, indices_ub, target_count - 1)
-                        T.pipe_barrier("v")
-                        T.tile.mul(offsets_i32_ub, offsets_i32_ub, target_stride1)
-                        T.pipe_barrier("v")
-                        T.tile.mul(offsets_i32_ub, offsets_i32_ub, 4)
-                        T.pipe_barrier("v")
-                        T.reinterpretcast(offsets_ub, offsets_i32_ub, "uint32_t")
-                        T.set_flag("mte2", "v", 0)
-                        T.wait_flag("mte2", "v", 0)
-                        if target_bits == 64:
-                            T.tile.cast(window_i32_ub, target_native_ub, "CAST_NONE", target_span)
+                        if (target_stride1 == 1) & (target_bits == 64):
+                            T.set_flag("mte2", "v", 0)
+                            T.wait_flag("mte2", "v", 0)
+                            T.tile.cast(full_ub, target_native_ub, "CAST_NONE", target_count)
+                        else:
+                            # Padded lanes reuse the last valid ID within the window.
+                            T.tile.min(offsets_i32_ub, indices_ub, target_count - 1)
                             T.pipe_barrier("v")
-                        T.tile.gather(full_ub, window_i32_ub, offsets_ub, 0)
+                            T.tile.mul(offsets_i32_ub, offsets_i32_ub, target_stride1)
+                            T.pipe_barrier("v")
+                            T.tile.mul(offsets_i32_ub, offsets_i32_ub, 4)
+                            T.pipe_barrier("v")
+                            T.reinterpretcast(offsets_ub, offsets_i32_ub, "uint32_t")
+                            T.set_flag("mte2", "v", 0)
+                            T.wait_flag("mte2", "v", 0)
+                            if target_bits == 64:
+                                T.tile.cast(window_i32_ub, target_native_ub, "CAST_NONE", target_span)
+                                T.pipe_barrier("v")
+                            T.tile.gather(full_ub, window_i32_ub, offsets_ub, 0)
 
                         if mask_enabled != 0:
                             T.set_flag("v", "mte2", 0)
@@ -195,19 +200,26 @@ def build_greedy_prefix_verify_kernel(
                                     draft[draft_offset : draft_offset + draft_span],
                                     window_i32_ub,
                                 )
-                            T.tile.min(offsets_i32_ub, indices_ub, target_count - 1)
-                            T.pipe_barrier("v")
-                            T.tile.mul(offsets_i32_ub, offsets_i32_ub, draft_stride1)
-                            T.pipe_barrier("v")
-                            T.tile.mul(offsets_i32_ub, offsets_i32_ub, 4)
-                            T.pipe_barrier("v")
-                            T.reinterpretcast(offsets_ub, offsets_i32_ub, "uint32_t")
-                            T.set_flag("mte2", "v", 0)
-                            T.wait_flag("mte2", "v", 0)
-                            if draft_bits == 64:
-                                T.tile.cast(window_i32_ub, draft_native_ub, "CAST_NONE", draft_span)
+                            if (draft_stride1 == 1) & (draft_bits == 64):
+                                T.set_flag("mte2", "v", 0)
+                                T.wait_flag("mte2", "v", 0)
+                                # Compare reads all 64 lanes, including short-tile padding.
+                                T.tile.fill(draft_i32_ub, 0)
+                                T.tile.cast(draft_i32_ub, draft_native_ub, "CAST_NONE", target_count)
+                            else:
+                                T.tile.min(offsets_i32_ub, indices_ub, target_count - 1)
                                 T.pipe_barrier("v")
-                            T.tile.gather(draft_i32_ub, window_i32_ub, offsets_ub, 0)
+                                T.tile.mul(offsets_i32_ub, offsets_i32_ub, draft_stride1)
+                                T.pipe_barrier("v")
+                                T.tile.mul(offsets_i32_ub, offsets_i32_ub, 4)
+                                T.pipe_barrier("v")
+                                T.reinterpretcast(offsets_ub, offsets_i32_ub, "uint32_t")
+                                T.set_flag("mte2", "v", 0)
+                                T.wait_flag("mte2", "v", 0)
+                                if draft_bits == 64:
+                                    T.tile.cast(window_i32_ub, draft_native_ub, "CAST_NONE", draft_span)
+                                    T.pipe_barrier("v")
+                                T.tile.gather(draft_i32_ub, window_i32_ub, offsets_ub, 0)
                             T.pipe_barrier("v")
                             T.tile.compare(equal_bits_ub, draft_i32_ub, full_ub, "EQ")
 
