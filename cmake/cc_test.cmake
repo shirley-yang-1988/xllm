@@ -122,6 +122,17 @@ function(cc_test)
 
   add_dependencies(all_tests ${CC_TEST_NAME})
 
+  # third_party targets stay in all_tests, so they are still built, but they are
+  # not registered with CTest: registration here executes the test binary, and a
+  # third_party harness carries its own main() and its own runtime bootstrap
+  # (see third_party/torch_npu_ops/triton_npu/test) that xLLM's test
+  # registration must not drive. xLLM owns only its own test surface.
+  string(FIND "${CMAKE_CURRENT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/third_party/" _cc_test_third_party_pos)
+  if(_cc_test_third_party_pos EQUAL 0)
+    message(STATUS "cc_test(${CC_TEST_NAME}): third_party target, built but not registered with CTest")
+    return()
+  endif()
+
   # gtest_add_tests() derives the case list by scanning the sources for TEST()
   # declarations, so a declaration its pattern does not match is silently absent
   # from CTest even though the binary contains it. Discover the cases from the

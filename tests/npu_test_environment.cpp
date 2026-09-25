@@ -32,38 +32,12 @@ namespace {
 // PyGILState_Check failure).
 PyThreadState* g_saved_thread_state = nullptr;
 
-// Whether init_npu_test_runtime() has run. Py_IsInitialized() cannot serve as
-// the idempotence check: kInterpreterGuard below brings the interpreter up
-// before main(), so that check would be true on entry and the torch_npu import
-// would be skipped, leaving every NPU test without its runtime.
-bool g_npu_runtime_initialized = false;
-
-// libtriton.so is a prebuilt wheel and releases pybind11 objects from a static
-// destructor that runs during exit(). pybind11 asserts the GIL in
-// handle::dec_ref(), so the process aborts at exit unless the interpreter
-// exists and the exiting thread holds the GIL. GTest's discovery call
-// (--gtest_list_tests) never runs the global Environment below, so the
-// interpreter has to come up during static initialization instead. The GIL
-// deliberately stays held: init_npu_test_runtime() releases it and
-// finalize_npu_test_runtime() takes it back, and when neither runs, the guard
-// still holds it at exit.
-struct InterpreterGuard {
-  InterpreterGuard() {
-    if (!Py_IsInitialized()) {
-      Py_InitializeEx(0);
-    }
-  }
-};
-
-const InterpreterGuard kInterpreterGuard;
-
 }  // namespace
 
 void init_npu_test_runtime() {
-  if (g_npu_runtime_initialized) {
+  if (Py_IsInitialized()) {
     return;
   }
-  g_npu_runtime_initialized = true;
 
   // 1. Tolerate ACL_ERROR_INTERNAL_ERROR — dump server may fail to start but
   //    the runtime is still usable, matching the production launch path.
@@ -73,10 +47,9 @@ void init_npu_test_runtime() {
     std::abort();
   }
 
-  // 2. The interpreter is already up (kInterpreterGuard booted it before
-  //    main()) and this thread holds the GIL, so the import below can run
-  //    directly.
+  // 2. Boot the Python interpreter before importing torch_npu.
   setenv("TORCH_DEVICE_BACKEND_AUTOLOAD", "0", 1);
+  Py_InitializeEx(0);
 
   // 3. Import torch_npu and run its Python-side runtime init. Suppressing
   //    torch._C._get_accelerator during import matches production and avoids
