@@ -482,6 +482,16 @@ def test_int64_prefix_patterns(runner: _KernelRunner, rejection: str) -> None:
     _check_case(runner, inputs, mask=True)
 
 
+@pytest.mark.parametrize("batch", [1, 2, 4, 8, 16, 24, 32])
+@pytest.mark.parametrize("rejection", ["first", "middle", "last", "all", "rematch", "mixed"])
+@pytest.mark.parametrize("mask", [True, False], ids=["masked", "full-only"])
+def test_int64_five_draft_steps_batch_matrix(runner: _KernelRunner, batch: int, rejection: str, mask: bool) -> None:
+    # Five draft steps plus the bonus produce six output tokens per sequence.
+    inputs = _mtp_inputs(*_logical_ids(batch, 5, rejection, edge_values=True), runner.device)
+    outputs = _check_case(runner, inputs, mask)
+    assert outputs.full.shape == (batch, 6)
+
+
 @pytest.mark.parametrize("first_reject", [7, 8, 15, 16, 63, 64, 65])
 def test_int64_packed_mask_byte_boundaries(runner: _KernelRunner, first_reject: int) -> None:
     draft, target, bonus = _logical_ids(3, 65, "all", edge_values=True)
