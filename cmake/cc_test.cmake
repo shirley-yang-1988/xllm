@@ -120,18 +120,18 @@ function(cc_test)
     target_link_libraries(${CC_TEST_NAME} PRIVATE ${COMMON_LIBS})
   endif()
 
-  add_dependencies(all_tests ${CC_TEST_NAME})
-
-  # third_party targets stay in all_tests, so they are still built, but they are
-  # not registered with CTest: registration here executes the test binary, and a
-  # third_party harness carries its own main() and its own runtime bootstrap
-  # (see third_party/torch_npu_ops/triton_npu/test) that xLLM's test
-  # registration must not drive. xLLM owns only its own test surface.
+  # xLLM owns only its own test surface. A cc_test() defined under third_party is
+  # a foreign harness: it brings its own main() and its own runtime bootstrap
+  # (see third_party/torch_npu_ops/triton_npu/test), so it is neither built by
+  # all_tests nor registered with CTest - registration here means executing the
+  # binary. Build such a target by name when it is actually wanted.
   string(FIND "${CMAKE_CURRENT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/third_party/" _cc_test_third_party_pos)
   if(_cc_test_third_party_pos EQUAL 0)
-    message(STATUS "cc_test(${CC_TEST_NAME}): third_party target, built but not registered with CTest")
+    message(STATUS "cc_test(${CC_TEST_NAME}): third_party target, not in all_tests and not registered with CTest")
     return()
   endif()
+
+  add_dependencies(all_tests ${CC_TEST_NAME})
 
   # gtest_add_tests() derives the case list by scanning the sources for TEST()
   # declarations, so a declaration its pattern does not match is silently absent
