@@ -61,6 +61,19 @@ cc_test(
 
 cc_test(
   NAME
+    completion_response_test
+  SRCS
+    completion_response_test.cpp
+  DEPS
+    api_service
+    GTest::gtest_main
+    nlohmann_json::nlohmann_json
+  ENVIRONMENT
+    "${_api_json_test_env}"
+)
+
+cc_test(
+  NAME
     chat_request_decoder_test
   SRCS
     chat_request_decoder_test.cpp
