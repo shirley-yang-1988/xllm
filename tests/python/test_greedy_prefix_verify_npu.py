@@ -531,6 +531,18 @@ def test_int64_independent_strided_storage(runner: _KernelRunner, width: int, co
     _check_case(runner, inputs, mask)
 
 
+@pytest.mark.parametrize(("draft_stride", "target_stride"), [(1, 3), (3, 1)])
+@pytest.mark.parametrize("mask", [True, False])
+def test_int64_asymmetric_column_strides(
+    runner: _KernelRunner, draft_stride: int, target_stride: int, mask: bool
+) -> None:
+    draft_cpu, target_cpu, bonus_cpu = _logical_ids(3, 65, "rematch", edge_values=True)
+    draft, draft_storage = _strided_input(draft_cpu, 64, runner.device, (65 * draft_stride + 7, draft_stride))
+    target, target_storage = _strided_input(target_cpu, 64, runner.device, (65 * target_stride + 7, target_stride))
+    bonus, bonus_storage = _strided_input(bonus_cpu, 64, runner.device, (5, 1))
+    _check_case(runner, _Inputs(draft, target, bonus, (draft_storage, target_storage, bonus_storage)), mask)
+
+
 @pytest.mark.parametrize("layout", ["all-zero-strides", "broadcast-rows", "read-only-alias"])
 @pytest.mark.parametrize("mask", [True, False])
 def test_int64_broadcast_and_alias_inputs(runner: _KernelRunner, layout: str, mask: bool) -> None:
