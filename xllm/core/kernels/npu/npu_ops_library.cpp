@@ -30,6 +30,7 @@ limitations under the License.
 #include <tuple>
 #include <vector>
 
+#include "core/framework/parallel_state/npu_process_group.h"
 #include "core/kernels/npu/tilelang/tilelang_ops_api.h"
 #include "kernels/npu/xllm_ops/xllm_ops_api.h"
 #include "npu_ops_api.h"
@@ -687,6 +688,12 @@ TORCH_LIBRARY(xllm_ops, m) {
       "sfa_dcp_remap_out(Tensor topk_indices, int physical_block_size, int "
       "shard_size, int shard_rank, Tensor(a!) out, Tensor(b!) idx_scratch) -> "
       "Tensor(a!)");
+  // In-place SUM all-reduce over the HCCL communicator the caller names,
+  // submitted on the caller's current stream
+  // (npu_process_group.h::all_reduce_on_current_stream). The communicator is
+  // passed as its handle because the Python side's process groups are not the
+  // C++ process groups this side can look up.
+  m.def("npu_all_reduce(Tensor(a!) x, int comm) -> ()");
 }
 
 TORCH_LIBRARY_IMPL(xllm_ops, PrivateUse1, m) {
@@ -741,6 +748,7 @@ TORCH_LIBRARY_IMPL(xllm_ops, PrivateUse1, m) {
   m.impl("sparse_flash_attention_lse",
          TORCH_FN(xllm::kernel::npu::sparse_flash_attention_lse));
   m.impl("sfa_dcp_remap_out", TORCH_FN(xllm::sfa_dcp_remap_out_npu));
+  m.impl("npu_all_reduce", TORCH_FN(xllm::all_reduce_on_current_stream));
 }
 
 // build_cp_context is pure host index math with no Tensor input, so the

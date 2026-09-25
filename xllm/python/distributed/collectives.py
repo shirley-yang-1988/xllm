@@ -23,6 +23,7 @@ place instead of splitting around it.
 from __future__ import annotations
 
 import json
+import os
 import socket
 from collections.abc import Sequence
 from datetime import timedelta
@@ -352,11 +353,30 @@ def _symm_buffer(group: ProcessGroup, group_name: str, x: torch.Tensor) -> torch
     return buffer
 
 
+def _tp_all_reduce_on_current_stream() -> bool:
+    """Whether the TP all-reduce is issued on the caller's stream.
+
+    Temporary P1 switch so one build can be run both ways and the submission stream
+    stays the only variable; unset keeps the process-group submission.  The switch and
+    the process-group path go away together once the inline path is accepted.
+    """
+    return os.environ.get("XLLM_TP_ALLREDUCE_ON_STREAM", "") not in ("", "0", "false")
+
+
 @torch.library.custom_op("xllm_ops::all_reduce_", mutates_args={"x"})
 def all_reduce_(x: torch.Tensor, group_name: str = "tp") -> None:
     group = _require_group(x, group_name)
     buffer = _symm_buffer(group, group_name, x)
     if buffer is None:
+        if group_name == "tp" and x.device.type == "npu" and _tp_all_reduce_on_current_stream():
+            # Issued on the stream the caller is already on.  Going through the group
+            # instead schedules the collective on its own communication stream and makes
+            # this one wait, which a captured graph then carries as an extra
+            # cross-stream edge around every collective.
+            from xllm.python.distributed.npu import all_reduce_on_current_stream
+
+            all_reduce_on_current_stream(x, group)
+            return
         dist.all_reduce(x, group=group)
         return
     flat = x.view(-1)

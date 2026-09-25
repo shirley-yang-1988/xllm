@@ -63,6 +63,23 @@ class ProcessGroupImpl : public ProcessGroup {
   c10_npu::NPUStream comm_stream_;
 };
 
+// Issue an in-place SUM all-reduce of `input` over the communicator `comm`
+// stands for, submitted on the stream the caller is already on. The
+// communicator is the one of the group to reduce over: the Python model
+// executor reduces over process groups the Python side created itself, so this
+// side cannot look the communicator up and the caller passes the handle. It
+// crosses as a plain integer because a torch schema has no pointer type
+// ("npu_all_reduce" in npu_ops_library.cpp).
+//
+// Submitting through torch_npu's ProcessGroupHCCL instead puts the collective
+// on the communication stream that group owns and makes the caller's stream
+// wait for it, which a captured ACLGraph then carries as a cross-stream edge
+// around every collective.  A collective submitted here carries no such edge.
+// The communicator must expand on AIV (HCCL_OP_EXPANSION_MODE=AIV): an
+// AICPU-expanded collective cannot run on the capture stream and fails the
+// capture instead of degrading silently.
+void all_reduce_on_current_stream(torch::Tensor& input, int64_t comm);
+
 // TODO: LOG HcclGetErrorString(r)
 #if defined(USE_NPU)
 #define HCCLCHECK(cmd)                     \

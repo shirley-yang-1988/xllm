@@ -225,4 +225,29 @@ std::string ProcessGroupImpl::hccl_comm_name(bool init_comm) {
 
 HcclComm ProcessGroupImpl::hccl_comm() { return comm_; }
 
+void all_reduce_on_current_stream(torch::Tensor& input, int64_t comm) {
+  check_input(input);
+  CHECK(comm != 0) << "all-reduce needs an HCCL communicator.";
+  CHECK(input.numel() > 0) << "all-reduce on an empty tensor.";
+
+  // The collective has to land on the stream the caller is capturing, so the
+  // stream is the caller's own and the device it belongs to has to be the
+  // tensor's device.
+  const int32_t device_index = static_cast<int32_t>(input.device().index());
+  const auto stream = c10_npu::getCurrentNPUStream();
+  const int32_t stream_device = static_cast<int32_t>(stream.device_index());
+  CHECK(stream_device == device_index)
+      << "all-reduce on device " << device_index
+      << " while the current stream belongs to device " << stream_device
+      << "; the collective would be submitted on another device's stream.";
+
+  HCCLCHECK(HcclAllReduce(input.data_ptr(),
+                          input.data_ptr(),
+                          static_cast<uint64_t>(input.numel()),
+                          to_hccl_data_type(input),
+                          HCCL_REDUCE_SUM,
+                          reinterpret_cast<HcclComm>(comm),
+                          stream.stream()));
+}
+
 }  // namespace xllm
