@@ -163,11 +163,12 @@ def build_greedy_prefix_verify_kernel(
                                 target[target_offset : target_offset + target_span],
                                 window_i32_ub,
                             )
-                        if (target_stride1 == 1) & (target_bits == 64):
-                            T.set_flag("mte2", "v", 0)
-                            T.wait_flag("mte2", "v", 0)
-                            T.tile.cast(full_ub, target_native_ub, "CAST_NONE", target_count)
-                        else:
+                        if target_bits == 64:
+                            if target_stride1 == 1:
+                                T.set_flag("mte2", "v", 0)
+                                T.wait_flag("mte2", "v", 0)
+                                T.tile.cast(full_ub, target_native_ub, "CAST_NONE", target_count)
+                        if (target_stride1 != 1) | (target_bits == 32):
                             # Padded lanes reuse the last valid ID within the window.
                             T.tile.min(offsets_i32_ub, indices_ub, target_count - 1)
                             T.pipe_barrier("v")
@@ -200,13 +201,14 @@ def build_greedy_prefix_verify_kernel(
                                     draft[draft_offset : draft_offset + draft_span],
                                     window_i32_ub,
                                 )
-                            if (draft_stride1 == 1) & (draft_bits == 64):
-                                T.set_flag("mte2", "v", 0)
-                                T.wait_flag("mte2", "v", 0)
-                                # Compare reads all 64 lanes, including short-tile padding.
-                                T.tile.fill(draft_i32_ub, 0)
-                                T.tile.cast(draft_i32_ub, draft_native_ub, "CAST_NONE", target_count)
-                            else:
+                            if draft_bits == 64:
+                                if draft_stride1 == 1:
+                                    T.set_flag("mte2", "v", 0)
+                                    T.wait_flag("mte2", "v", 0)
+                                    # Compare reads all 64 lanes, including short-tile padding.
+                                    T.tile.fill(draft_i32_ub, 0)
+                                    T.tile.cast(draft_i32_ub, draft_native_ub, "CAST_NONE", target_count)
+                            if (draft_stride1 != 1) | (draft_bits == 32):
                                 T.tile.min(offsets_i32_ub, indices_ub, target_count - 1)
                                 T.pipe_barrier("v")
                                 T.tile.mul(offsets_i32_ub, offsets_i32_ub, draft_stride1)
