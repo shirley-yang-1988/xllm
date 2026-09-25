@@ -13,6 +13,7 @@ cc_library(
     chat_request_decoder.h
     chat_struct_spans.h
     completion_json_parser.h
+    completion_response.h
     json_fast_path.h
     json_scan.h
     completion_service_impl.h
@@ -43,6 +44,7 @@ cc_library(
     chat_request_decoder.cpp
     chat_struct_spans.cpp
     completion_json_parser.cpp
+    completion_response.cpp
     json_fast_path.cpp
     json_scan.cpp
     service_impl_factory.cpp
