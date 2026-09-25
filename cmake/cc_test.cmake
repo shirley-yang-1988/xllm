@@ -122,15 +122,24 @@ function(cc_test)
 
   add_dependencies(all_tests ${CC_TEST_NAME})
 
-  gtest_add_tests(
-    TARGET ${CC_TEST_NAME}
+  # gtest_add_tests() derives the case list by scanning the sources for TEST()
+  # declarations, so a declaration its pattern does not match is silently absent
+  # from CTest even though the binary contains it. Discover the cases from the
+  # built binary instead, so registration cannot drift from the binary.
+  # The timeout is generous because these binaries link torch and the NPU
+  # runtime, and the default 5 seconds can be exceeded while many targets build
+  # in parallel.
+  set(_cc_test_properties "")
+  if(CC_TEST_ENVIRONMENT)
+    list(APPEND _cc_test_properties ENVIRONMENT "${CC_TEST_ENVIRONMENT}")
+  endif()
+
+  gtest_discover_tests(
+    ${CC_TEST_NAME}
     EXTRA_ARGS ${CC_TEST_ARGS}
     TEST_LIST _cc_test_${CC_TEST_NAME}_tests
+    PROPERTIES ${_cc_test_properties}
+    DISCOVERY_TIMEOUT 60
   )
-
-  if(CC_TEST_ENVIRONMENT)
-    set_tests_properties(${_cc_test_${CC_TEST_NAME}_tests}
-      PROPERTIES ENVIRONMENT "${CC_TEST_ENVIRONMENT}")
-  endif()
   #add_test(NAME ${CC_TEST_NAME} COMMAND ${CC_TEST_NAME} ${CC_TEST_ARGS})
 endfunction()
