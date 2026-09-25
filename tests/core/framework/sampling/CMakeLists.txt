@@ -1,5 +1,15 @@
 include(cc_test)
 
+set(sampler_npu_test_srcs "")
+set(sampler_npu_test_deps "")
+if(USE_NPU)
+  list(APPEND sampler_npu_test_srcs
+    greedy_prefix_verify_npu_test.cpp
+    greedy_prefix_verify_npu_benchmark_test.cpp
+  )
+  list(APPEND sampler_npu_test_deps :tilelang_kernels :platform)
+endif()
+
 cc_test(
   NAME
     sampler_test
@@ -8,6 +18,7 @@ cc_test(
     rejection_sampler_test.cpp
     "${PROJECT_SOURCE_DIR}/xllm/core/framework/sampling/rejection_sampler.cpp"
     sampling_params_test.cpp
+    ${sampler_npu_test_srcs}
   DEPS
     absl::strings
     GTest::gtest_main
@@ -15,6 +26,7 @@ cc_test(
     :sampler
     glog::glog
     :state_dict
+    ${sampler_npu_test_deps}
 )
 target_link_libraries(sampler_test PRIVATE brpc OpenSSL::SSL OpenSSL::Crypto leveldb::leveldb protobuf::libprotobuf)
 target_link_libraries(sampler_test
