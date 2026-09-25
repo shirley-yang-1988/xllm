@@ -24,6 +24,7 @@ limitations under the License.
 #include <cstdint>
 #include <string>
 
+#include "api_service/completion_response.h"
 #include "common/instance_name.h"
 #include "completion.pb.h"
 #include "core/distributed_runtime/llm_master.h"
@@ -42,26 +43,6 @@ limitations under the License.
 
 namespace xllm {
 namespace {
-void set_logprobs(proto::Choice* choice,
-                  const std::optional<std::vector<LogProb>>& logprobs) {
-  if (!logprobs.has_value() || logprobs.value().empty()) {
-    return;
-  }
-
-  auto* proto_logprobs = choice->mutable_logprobs();
-  // One entry per generated token, so the three parallel fields would otherwise
-  // grow from empty and re-copy themselves O(log n) times per response.
-  const int num_logprobs = static_cast<int>(logprobs.value().size());
-  proto_logprobs->mutable_tokens()->Reserve(num_logprobs);
-  proto_logprobs->mutable_token_ids()->Reserve(num_logprobs);
-  proto_logprobs->mutable_token_logprobs()->Reserve(num_logprobs);
-  for (const auto& logprob : logprobs.value()) {
-    proto_logprobs->add_tokens(logprob.token);
-    proto_logprobs->add_token_ids(logprob.token_id);
-    proto_logprobs->add_token_logprobs(logprob.logprob);
-  }
-}
-
 bool send_delta_to_client_brpc(std::shared_ptr<CompletionCall> call,
                                bool include_usage,
                                const std::string& request_id,
@@ -69,33 +50,22 @@ bool send_delta_to_client_brpc(std::shared_ptr<CompletionCall> call,
                                const std::string& model,
                                const RequestOutput& output) {
   auto& response = call->response();
+  const bool return_token_ids = call->request().return_token_ids();
 
   for (const auto& seq_output : output.outputs) {
-    if (!seq_output.text.empty()) {
-      response.Clear();
-      response.set_object("text_completion");
-      response.set_id(request_id);
-      response.set_created(created_time);
-      response.set_model(model);
-      auto* choice = response.add_choices();
-      choice->set_index(seq_output.index);
-      choice->set_text(seq_output.text);
-      set_logprobs(choice, seq_output.logprobs);
+    response.Clear();
+    response.set_object("text_completion");
+    response.set_id(request_id);
+    response.set_created(created_time);
+    response.set_model(model);
+    if (api_service::set_completion_delta(
+            &response, seq_output, return_token_ids)) {
       if (!call->write(response)) {
         return false;
       }
     }
 
-    if (seq_output.finish_reason.has_value()) {
-      response.Clear();
-      response.set_object("text_completion");
-      response.set_id(request_id);
-      response.set_created(created_time);
-      response.set_model(model);
-      auto* choice = response.add_choices();
-      choice->set_index(seq_output.index);
-      choice->set_text("");
-      choice->set_finish_reason(seq_output.finish_reason.value());
+    if (api_service::set_completion_finish(&response, seq_output)) {
       if (!call->write(response)) {
         return false;
       }
@@ -137,12 +107,11 @@ bool send_result_to_client_brpc(std::shared_ptr<CompletionCall> call,
   response.set_created(created_time);
   response.set_model(model);
 
+  const bool return_token_ids = call->request().return_token_ids();
   response.mutable_choices()->Reserve(req_output.outputs.size());
   for (const auto& output : req_output.outputs) {
     auto* choice = response.add_choices();
-    choice->set_index(output.index);
-    choice->set_text(output.text);
-    set_logprobs(choice, output.logprobs);
+    api_service::set_completion_choice(choice, output, return_token_ids);
     if (output.finish_reason.has_value()) {
       choice->set_finish_reason(output.finish_reason.value());
     }
