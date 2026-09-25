@@ -109,14 +109,11 @@ def build_greedy_prefix_verify_kernel(
             row_start = task_id * rows_per_task + T.min(task_id, extra_rows)
             valid_rows = rows_per_task + T.if_then_else(task_id < extra_rows, 1, 0)
             ids_per_tile = T.alloc_var("int32")
-            ids_per_tile = T.int32(TILE_IDS)
-            if target_stride1 > 1:
-                target_capacity = (WINDOW_IDS - 1) // target_stride1 + 1
-                ids_per_tile = T.min(ids_per_tile, target_capacity)
+            target_capacity = (WINDOW_IDS - 1) // T.max(target_stride1, T.int32(1)) + 1
+            ids_per_tile = T.min(T.int32(TILE_IDS), target_capacity)
             if mask_enabled != 0:
-                if draft_stride1 > 1:
-                    draft_capacity = (WINDOW_IDS - 1) // draft_stride1 + 1
-                    ids_per_tile = T.min(ids_per_tile, draft_capacity)
+                draft_capacity = (WINDOW_IDS - 1) // T.max(draft_stride1, T.int32(1)) + 1
+                ids_per_tile = T.min(ids_per_tile, draft_capacity)
             target_native_ub = T.alloc_ub((WINDOW_IDS,), target_dtype)
             draft_native_ub = T.alloc_ub((WINDOW_IDS,), draft_dtype)
             window_i32_ub = T.alloc_ub((WINDOW_IDS,), "int32")
