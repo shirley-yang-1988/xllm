@@ -45,6 +45,8 @@ cc_library(
     rec_constrained_topk.cpp
     npu_ops_library.cpp
   DEPS
+    # collectives.cpp issues raw Hccl* calls on the caller's stream.
+    hccl
     :torch_npu_kernels
     :tilelang_kernels
     xllm_ops
