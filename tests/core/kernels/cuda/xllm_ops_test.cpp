@@ -297,6 +297,10 @@ class FakeBackend:
     def __init__(self, **kwargs):
         pass
 
+    @property
+    def supports_prepared_metadata(self):
+        return False
+
     def bind_kv_caches(self, kv_caches):
         pass
 
