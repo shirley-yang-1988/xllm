@@ -19,6 +19,7 @@ limitations under the License.
 
 #include <c10d/ProcessGroup.hpp>
 #include <c10d/TCPStore.hpp>
+#include <cstdlib>
 #include <torch_npu/csrc/distributed/ProcessGroupHCCL.hpp>
 
 #ifdef TORCH_HIGHER_THAN_PTA6
@@ -72,6 +73,7 @@ HcclDataType to_hccl_data_type(const torch::Tensor& input) {
       return HCCL_DATA_TYPE_BFP16;
     default:
       LOG(FATAL) << "Unconvertible HCCL type " << type;
+      std::abort();
   }
 }
 
