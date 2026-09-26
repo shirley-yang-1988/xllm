@@ -525,8 +525,10 @@ NpuMixedTransferCaches make_npu_mixed_transfer_caches(
   tensors.ssm = tensors.backing.index({1});
   tensors.key = tensors.backing.index({2});
   tensors.value = tensors.backing.index({3});
-  tensors.index = tensors.backing.index({4});
-  tensors.index_scale = tensors.backing.index({5});
+  // Keep the synthetic transfer payloads equally sized, with an explicit
+  // single-head axis for the index and scale cache layout descriptors.
+  tensors.index = tensors.backing.index({4}).unsqueeze(2);
+  tensors.index_scale = tensors.backing.index({5}).unsqueeze(2);
   tensors.caches.emplace_back(
       LinearAttentionKVCacheTensors{tensors.conv, tensors.ssm});
   tensors.caches.emplace_back(
@@ -594,6 +596,12 @@ int run_npu_round_trip_peer(int command_fd,
   remote_transfer.initialize(device_index);
   NpuMixedTransferCaches remote_caches =
       make_npu_mixed_transfer_caches(remote_torch_device);
+  remote_transfer.configure_cache_layout(make_args(/*rank=*/0,
+                                                   /*world_size=*/1,
+                                                   /*dp_size=*/1),
+                                         ModelArgs(),
+                                         /*block_token_capacity=*/1024,
+                                         /*is_spec_draft=*/false);
   remote_transfer.register_kv_cache(
       remote_caches.caches, KVCacheShape(), torch::kBFloat16);
 
@@ -1423,6 +1431,12 @@ TEST(MooncakeKVCacheTransferDefaultTest,
   local_transfer.initialize(/*device_id=*/0);
   NpuMixedTransferCaches local_caches =
       make_npu_mixed_transfer_caches(local_torch_device);
+  local_transfer.configure_cache_layout(make_args(/*rank=*/0,
+                                                  /*world_size=*/1,
+                                                  /*dp_size=*/1),
+                                        ModelArgs(),
+                                        /*block_token_capacity=*/1024,
+                                        /*is_spec_draft=*/false);
   local_transfer.register_kv_cache(
       local_caches.caches, KVCacheShape(), torch::kBFloat16);
 
