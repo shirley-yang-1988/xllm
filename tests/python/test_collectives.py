@@ -47,8 +47,11 @@ collectives = importlib.util.module_from_spec(_SPEC)
 # registration import is stubbed when torch_npu has not already been imported.
 with (
     patch.object(current_platform, "is_npu", return_value=True),
-    patch.dict(sys.modules, {"torch_npu": sys.modules.get("torch_npu", SimpleNamespace())}),
+    pytest.MonkeyPatch.context() as module_patch,
 ):
+    # Restore only torch_npu: patch.dict would also remove backend modules
+    # imported here, leaving the selected callable bound to an evicted module.
+    module_patch.setitem(sys.modules, "torch_npu", sys.modules.get("torch_npu", SimpleNamespace()))
     _SPEC.loader.exec_module(collectives)
 
 
