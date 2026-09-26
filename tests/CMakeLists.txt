@@ -3,11 +3,13 @@ if(NOT BUILD_TESTING)
 endif()
 
 if(USE_NPU)
+  add_dependencies(all_tests xllm_export)
   add_test(
     NAME python_executor_test
     COMMAND
       "${CMAKE_COMMAND}" -E env
       "PYTHONPATH=${PROJECT_SOURCE_DIR}:$ENV{PYTHONPATH}"
+      "XLLM_TEST_NATIVE_LIBRARY=$<TARGET_FILE:xllm_export>"
       "${Python3_EXECUTABLE}" -m pytest -q "${CMAKE_CURRENT_SOURCE_DIR}/python"
   )
   set_tests_properties(
