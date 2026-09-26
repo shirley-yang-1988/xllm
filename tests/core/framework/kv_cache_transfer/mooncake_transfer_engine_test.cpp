@@ -627,6 +627,16 @@ int run_npu_round_trip_peer(int command_fd,
   uint64_t remote_cluster_id = 0;
   std::string remote_addr;
   remote_transfer.get_cache_info(remote_cluster_id, remote_addr);
+  uint64_t local_cluster_id = 0;
+  uint16_t local_listen_port = 0;
+  std::string local_addr;
+  // The push destination negotiates the outgoing plan on the source.
+  if (!read_endpoint(
+          command_fd, &local_cluster_id, &local_listen_port, &local_addr) ||
+      !remote_transfer.link_clusters(
+          {local_cluster_id}, {local_addr}, {local_listen_port})) {
+    return 15;
+  }
   if (remote_addr.empty() ||
       !write_endpoint(status_fd, remote_cluster_id, listen_port, remote_addr)) {
     return 11;
@@ -653,11 +663,16 @@ int run_npu_round_trip_peer(int command_fd,
           &remote_caches, /*block_id=*/1, /*pull_pattern=*/true);
       success = remote_device.synchronize_default_stream() == 0 ? 1 : 0;
     } else if (command == kStopChildCommand) {
+      if (!remote_transfer.unlink_cluster(local_cluster_id,
+                                          local_addr,
+                                          local_listen_port,
+                                          /*force_flag=*/true)) {
+        return 16;
+      }
       close(command_fd);
       close(status_fd);
-      // The peer is an exec-isolated test process. The transfer and remote
-      // session have already been verified and closed by the parent before
-      // this command. Bypass third-party process-global teardown, which can
+      // Both negotiated directions are closed. The peer is an exec-isolated
+      // test process; bypass third-party process-global teardown, which can
       // terminate on a still-joinable TransferEngine thread.
       _exit(0);
     } else {
@@ -1466,6 +1481,10 @@ TEST(MooncakeKVCacheTransferDefaultTest,
   std::string local_addr;
   local_transfer.get_cache_info(local_cluster_id, local_addr);
   ASSERT_FALSE(local_addr.empty());
+  ASSERT_TRUE(write_endpoint(parent_to_child[1],
+                             local_cluster_id,
+                             static_cast<uint16_t>(local_listen_port),
+                             local_addr));
 
   uint64_t remote_cluster_id = 0;
   uint16_t received_remote_port = 0;
