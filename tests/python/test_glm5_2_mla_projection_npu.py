@@ -28,7 +28,14 @@ torch_npu = pytest.importorskip("torch_npu")
 
 
 @pytest.fixture(scope="module")
-def project() -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
+def native_ops() -> None:
+    native_library = os.environ["XLLM_TEST_NATIVE_LIBRARY"]
+    assert Path(native_library).is_file(), f"native operator library does not exist: {native_library}"
+    torch.ops.load_library(native_library)
+
+
+@pytest.fixture(scope="module")
+def project(native_ops: None) -> Callable[[torch.Tensor, torch.Tensor], torch.Tensor]:
     assert torch.npu.is_available(), "MLA projection tests require an Ascend NPU"
     from xllm.python.kernels_npu.attention import batch_matmul_transpose
 
@@ -131,11 +138,8 @@ def test_projection(
 
 @pytest.mark.parametrize("layout", ("q_contiguous", "q_split", "q_offset", "v_contiguous"))
 @pytest.mark.parametrize("heads,q_dim,v_dim", ((4, 192, 256), (8, 128, 128)), ids=("glm", "deepseek"))
-def test_atb_ein_sum_projection(layout: str, heads: int, q_dim: int, v_dim: int) -> None:
+def test_atb_ein_sum_projection(native_ops: None, layout: str, heads: int, q_dim: int, v_dim: int) -> None:
     assert torch.npu.is_available(), "ATB projection tests require an Ascend NPU"
-    native_library = os.environ["XLLM_TEST_NATIVE_LIBRARY"]
-    assert Path(native_library).is_file(), f"native operator library does not exist: {native_library}"
-    torch.ops.load_library(native_library)
     from xllm.python.kernels_npu.linear import atb_matmul_ein_sum
 
     _, x, weight = _make_inputs(4, layout, torch.bfloat16, heads, q_dim, v_dim)
