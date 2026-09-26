@@ -15,7 +15,6 @@ limitations under the License.
 #include "npu_process_group.h"
 
 #include <ATen/MemoryOverlap.h>
-#include <hccl/hccl_comm.h>
 
 #include <c10d/ProcessGroup.hpp>
 #include <c10d/TCPStore.hpp>
