@@ -819,7 +819,7 @@ class TestUT(Command):
         pass
 
     def run_ctest(self, cmake_dir: str) -> int:
-        default_parallel: int = max(os.cpu_count() or 1, 8)
+        default_parallel: int = min(max(os.cpu_count() or 1, 8), 160)
         test_parallel: str = os.getenv("CTEST_PARALLEL", str(default_parallel))
         logger.info(f"Test parallelism: {test_parallel} (set CTEST_PARALLEL to override)")
 
