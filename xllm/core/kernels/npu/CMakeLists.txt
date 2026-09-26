@@ -18,6 +18,7 @@ cc_library(
   SRCS
     active.cpp
     attention.cpp
+    collectives.cpp
     fused_layernorm.cpp
     npu_adalayernorm.cpp
     matmul.cpp
@@ -44,7 +45,6 @@ cc_library(
     rec_constrained_topk.cpp
     npu_ops_library.cpp
   DEPS
-    :parallel_state
     :torch_npu_kernels
     :tilelang_kernels
     xllm_ops

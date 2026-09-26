@@ -63,29 +63,14 @@ class ProcessGroupImpl : public ProcessGroup {
   c10_npu::NPUStream comm_stream_;
 };
 
-// Submit on the current NPU stream. Buffers must be dense, contiguous, nonempty
-// and in ND storage format. The caller owns the communicator (encoded as an
-// integer for Torch) and buffers, and must retain them through graph replay.
-// ACLGraph capture requires HCCL_OP_EXPANSION_MODE=AIV.
-// In-place SUM, preserving dtype.
-void all_reduce_on_current_stream(torch::Tensor& input, int64_t comm);
-
-// Out-of-place, rank-ordered concatenation: output.numel = W * input.numel.
-void all_gather_on_current_stream(const torch::Tensor& input,
-                                  torch::Tensor& output,
-                                  int64_t comm);
-
-// Out-of-place SUM of rank-ordered blocks: input.numel = W * output.numel.
-void reduce_scatter_on_current_stream(const torch::Tensor& input,
-                                      torch::Tensor& output,
-                                      int64_t comm);
-
+// TODO: LOG HcclGetErrorString(r)
 #if defined(USE_NPU)
-#define HCCLCHECK(cmd)                                                     \
-  do {                                                                     \
-    const HcclResult result = (cmd);                                       \
-    CHECK_EQ(result, HCCL_SUCCESS)                                         \
-        << #cmd << " failed, HCCL error " << static_cast<int32_t>(result); \
+#define HCCLCHECK(cmd)                     \
+  do {                                     \
+    HcclResult r = cmd;                    \
+    if (r != HCCL_SUCCESS) {               \
+      LOG(FATAL) << "Failed, HCCL error."; \
+    }                                      \
   } while (0)
 #endif
 }  // namespace xllm

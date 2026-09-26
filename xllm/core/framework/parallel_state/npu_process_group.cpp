@@ -14,18 +14,11 @@ limitations under the License.
 ==============================================================================*/
 #include "npu_process_group.h"
 
-#include <ATen/MemoryOverlap.h>
+#include <torch_npu/csrc/core/npu/NPUCachingAllocator.h>
 
 #include <c10d/ProcessGroup.hpp>
 #include <c10d/TCPStore.hpp>
 #include <torch_npu/csrc/distributed/ProcessGroupHCCL.hpp>
-
-#ifdef TORCH_HIGHER_THAN_PTA6
-#include <torch_npu/csrc/aten/CustomFunctions.h>
-#else
-#include <torch_npu/csrc/aten/NPUNativeFunctions.h>
-#endif
-#include <torch_npu/csrc/core/npu/NPUFormat.h>
 
 #include "core/framework/config/dit_config.h"
 #include "core/framework/config/eplb_config.h"
@@ -49,7 +42,7 @@ torch::Tensor flatten_for_scatter_gather(std::vector<torch::Tensor>& tensors) {
 }
 
 HcclDataType to_hccl_data_type(const torch::Tensor& input) {
-  const torch::ScalarType type = input.scalar_type();
+  const auto type = input.scalar_type();
   switch (type) {
     case torch::kFloat:
       return HCCL_DATA_TYPE_FP32;
@@ -71,49 +64,13 @@ HcclDataType to_hccl_data_type(const torch::Tensor& input) {
       return HCCL_DATA_TYPE_BFP16;
     default:
       LOG(FATAL) << "Unconvertible HCCL type " << type;
-      return HCCL_DATA_TYPE_FP32;
   }
 }
 
-void check_input(const torch::Tensor& input) {
-  CHECK(is_npu(input)) << "HCCL requires an NPU tensor.";
-  CHECK(input.layout() == torch::kStrided) << "HCCL requires a dense tensor.";
-  CHECK(input.is_contiguous()) << "HCCL requires a contiguous tensor.";
-  CHECK_GT(input.numel(), 0) << "HCCL requires a nonempty tensor.";
-#ifdef TORCH_HIGHER_THAN_PTA6
-  const int64_t format = at_npu::native::get_npu_format(input);
-#else
-  const int64_t format =
-      at_npu::native::NPUNativeFunctions::get_npu_format(input);
-#endif
-  CHECK_EQ(format, ACL_FORMAT_ND) << "HCCL requires ND storage format.";
-}
-
-c10_npu::NPUStream collective_stream(const torch::Tensor& input, int64_t comm) {
-  check_input(input);
-  CHECK_NE(comm, 0) << "HCCL communicator must not be null.";
-  const auto stream = c10_npu::getCurrentNPUStream();
-  CHECK_EQ(stream.device_index(), input.device().index())
-      << "HCCL current stream and tensor must be on the same device: "
-      << input.device();
-  return stream;
-}
-
-void check_out_of_place_buffers(const torch::Tensor& input,
-                                const torch::Tensor& output) {
-  check_input(output);
-  CHECK_EQ(output.device(), input.device()) << "HCCL buffer device mismatch.";
-  CHECK_EQ(output.scalar_type(), input.scalar_type())
-      << "HCCL buffer dtype mismatch.";
-  CHECK(torch::get_overlap_status(input, output) == torch::MemOverlapStatus::No)
-      << "Out-of-place AllGather/ReduceScatter buffers must not overlap.";
-}
-
-int64_t comm_rank_size(int64_t comm) {
-  uint32_t rank_size = 0;
-  HCCLCHECK(HcclGetRankSize(reinterpret_cast<HcclComm>(comm), &rank_size));
-  CHECK_GT(rank_size, 0) << "HCCL communicator has no ranks.";
-  return static_cast<int64_t>(rank_size);
+void check_input(torch::Tensor input) {
+  CHECK(is_npu(input)) << "input should be npu tensor";
+  CHECK(input.is_contiguous()) << "input should be contiguous";
+  CHECK(!input.is_sparse()) << "input have to be npu dense tensor";
 }
 
 std::string resolve_tcp_store_host(const std::string& host, int32_t rank_size) {
@@ -267,56 +224,5 @@ std::string ProcessGroupImpl::hccl_comm_name(bool init_comm) {
 }
 
 HcclComm ProcessGroupImpl::hccl_comm() { return comm_; }
-
-void all_reduce_on_current_stream(torch::Tensor& input, int64_t comm) {
-  const auto stream = collective_stream(input, comm);
-  HCCLCHECK(HcclAllReduce(input.data_ptr(),
-                          input.data_ptr(),
-                          static_cast<uint64_t>(input.numel()),
-                          to_hccl_data_type(input),
-                          HCCL_REDUCE_SUM,
-                          reinterpret_cast<HcclComm>(comm),
-                          stream.stream()));
-}
-
-void all_gather_on_current_stream(const torch::Tensor& input,
-                                  torch::Tensor& output,
-                                  int64_t comm) {
-  const auto stream = collective_stream(input, comm);
-  check_out_of_place_buffers(input, output);
-  const int64_t rank_size = comm_rank_size(comm);
-  CHECK_EQ(output.numel() % rank_size, 0)
-      << "AllGather output size must be divisible by rank size " << rank_size;
-  CHECK_EQ(output.numel() / rank_size, input.numel())
-      << "AllGather expects one input-sized output block per rank.";
-
-  HCCLCHECK(HcclAllGather(input.data_ptr(),
-                          output.data_ptr(),
-                          static_cast<uint64_t>(input.numel()),
-                          to_hccl_data_type(input),
-                          reinterpret_cast<HcclComm>(comm),
-                          stream.stream()));
-}
-
-void reduce_scatter_on_current_stream(const torch::Tensor& input,
-                                      torch::Tensor& output,
-                                      int64_t comm) {
-  const auto stream = collective_stream(input, comm);
-  check_out_of_place_buffers(input, output);
-  const int64_t rank_size = comm_rank_size(comm);
-  CHECK_EQ(input.numel() % rank_size, 0)
-      << "ReduceScatter input size must be divisible by rank size "
-      << rank_size;
-  CHECK_EQ(input.numel() / rank_size, output.numel())
-      << "ReduceScatter expects one output-sized input block per rank.";
-
-  HCCLCHECK(HcclReduceScatter(input.data_ptr(),
-                              output.data_ptr(),
-                              static_cast<uint64_t>(output.numel()),
-                              to_hccl_data_type(input),
-                              HCCL_REDUCE_SUM,
-                              reinterpret_cast<HcclComm>(comm),
-                              stream.stream()));
-}
 
 }  // namespace xllm
