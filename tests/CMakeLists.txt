@@ -3,6 +3,9 @@ if(NOT BUILD_TESTING)
 endif()
 
 if(USE_NPU)
+  # The python tests import the built extension through `xllm`, so it has to exist
+  # before they run.
+  add_dependencies(all_tests xllm_export)
   add_test(
     NAME python_executor_test
     COMMAND

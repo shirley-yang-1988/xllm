@@ -1,3 +1,4 @@
+import glob
 import importlib.util
 import os
 import sys
@@ -12,24 +13,42 @@ def _get_python_version_tag() -> str:
 
 
 def _find_export_so_path() -> str:
-    pkg_dir = os.path.dirname(__file__)
+    pkg_dir = os.path.dirname(os.path.abspath(__file__))
     pyver = _get_python_version_tag()
+
+    # An installed package carries the extension in the package directory, while
+    # setup.py puts the extension of a source tree in
+    # build/lib.<platform>-cpython-<ver>/xllm. Search the package first, then the
+    # build directories of the source tree, so `import xllm` resolves the library
+    # of the tree being used instead of requiring an installed package.
+    lib_dirs = [pkg_dir]
+    build_lib_dirs = glob.glob(os.path.join(os.path.dirname(pkg_dir), "build", "lib.*"))
+    # The interpreter's own ABI first, other build directories after it.
+    build_lib_dirs.sort(key=lambda d: f"-cpython-{pyver}" not in os.path.basename(d))
+    lib_dirs.extend(os.path.join(d, "xllm") for d in build_lib_dirs)
 
     # Preferred, exact tags we build for today.
     candidates = [
-        os.path.join(pkg_dir, f"xllm_export.cpython-{pyver}-x86_64-linux-gnu.so"),
-        os.path.join(pkg_dir, f"xllm_export.cpython-{pyver}-aarch64-linux-gnu.so"),
+        f"xllm_export.cpython-{pyver}-x86_64-linux-gnu.so",
+        f"xllm_export.cpython-{pyver}-aarch64-linux-gnu.so",
     ]
-    for p in candidates:
-        if os.path.exists(p):
-            return os.path.abspath(p)
+    for lib_dir in lib_dirs:
+        for name in candidates:
+            path = os.path.join(lib_dir, name)
+            if os.path.exists(path):
+                return os.path.abspath(path)
 
     # Fallback: accept any xllm_export*.so that got packaged (tag may differ).
-    for fname in os.listdir(pkg_dir):
-        if fname.startswith("xllm_export") and fname.endswith(".so"):
-            return os.path.abspath(os.path.join(pkg_dir, fname))
+    for lib_dir in lib_dirs:
+        if not os.path.isdir(lib_dir):
+            continue
+        for fname in sorted(os.listdir(lib_dir)):
+            if fname.startswith("xllm_export") and fname.endswith(".so"):
+                return os.path.abspath(os.path.join(lib_dir, fname))
 
-    raise ImportError(f"cannot find xllm_export shared library under {pkg_dir!r}. Expected one of: {candidates!r}")
+    raise ImportError(
+        f"cannot find xllm_export shared library under {pkg_dir!r}. Searched {lib_dirs!r} for {candidates!r}"
+    )
 
 
 def _load_xllm_export() -> ModuleType:
