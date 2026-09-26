@@ -12,17 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""The NPU side of ``xllm.python.distributed``.
+"""NPU-specific collective implementations."""
 
-The collectives in the parent package are hardware-neutral and reach this package
-only where the NPU needs something the hardware-neutral path cannot express, so
-only an NPU process imports it.
-"""
-
-from __future__ import annotations
-
-from xllm.python.distributed.npu.hccl import all_reduce_on_current_stream
+from xllm.python.distributed.npu.hccl import (
+    all_gather_on_current_stream,
+    all_reduce_on_current_stream,
+    reduce_scatter_on_current_stream,
+)
 
 __all__ = [
+    "all_gather_on_current_stream",
     "all_reduce_on_current_stream",
+    "reduce_scatter_on_current_stream",
 ]

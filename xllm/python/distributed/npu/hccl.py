@@ -12,57 +12,46 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""NPU collectives issued on the caller's stream.
+"""HCCL collectives on the caller's current NPU stream.
 
-torch_npu's HCCL process group schedules every collective on the communication
-stream it owns and makes the caller's stream wait for the outcome, so a captured
-ACLGraph has to carry a cross-stream edge around each collective (the
-``CAPTURE_WAIT`` / ``CAPTURE_RECORD`` pair in a trace).  HCCL's own C API takes the
-stream as an argument
-
-    HcclAllReduce(sendBuf, recvBuf, count, dataType, op, comm, stream)
-
-so the same collective can be submitted on the stream the surrounding computation
-already runs on, with no cross-stream edge at all.  The submission is the
-registered ``xllm_ops::npu_all_reduce``, which takes the tensor and the
-communicator and issues the collective on the caller's current stream.
-
-Submitting a collective inline requires the communicator to expand on AIV
-(``HCCL_OP_EXPANSION_MODE=AIV``): an AICPU-expanded collective cannot run on the
-capture stream and fails the capture instead of degrading silently.
+Buffers must be contiguous, nonempty and in ND storage format. The caller must
+retain the group and buffers through completion and graph replay. Capture requires
+``HCCL_OP_EXPANSION_MODE=AIV``; unsupported execution fails without fallback.
 """
 
 from __future__ import annotations
 
 import torch
 import torch.distributed as dist
-import torch_npu  # noqa: F401  (registers the npu device and its stream API)
-
-
-def all_reduce_on_current_stream(x: torch.Tensor, group: dist.ProcessGroup) -> None:
-    """In-place SUM all-reduce of ``x`` over ``group``, on the caller's stream.
-
-    ``group`` must be an HCCL group on the same device as ``x``.  The payload keeps
-    the caller's dtype: this entry point changes which stream the collective is
-    submitted on, not how it reduces.
-    """
-    if x.device.type != "npu":
-        raise RuntimeError(f"an NPU all-reduce needs an NPU tensor, got {x.device}")
-    torch.ops.xllm_ops.npu_all_reduce(x, _hccl_comm(group, x))
+import torch_npu  # noqa: F401
 
 
 def _hccl_comm(group: dist.ProcessGroup, x: torch.Tensor) -> int:
-    """The HCCL communicator this process holds for ``group`` on ``x``'s device.
-
-    The argument selects among the communicators the backend keeps.  The value that
-    addresses this process's own communicator is the device index: measured on a
-    2-rank group placed on devices 4-7, where the ranks are 0..1 but the device
-    indices are 4..7, the device index returned a distinct valid handle and the
-    reduction was bit-exact.  Passing a rank instead, as torch_npu's own callers do,
-    is only equivalent while rank == device index, which is what one process per
-    device gives and a device base or an uneven rank map does not.
-    """
+    if x.device.type != "npu":
+        raise RuntimeError(f"HCCL requires an NPU tensor, got {x.device}")
+    # torch_npu indexes local communicators by device, not group rank.
     comm = group._get_backend(x.device).get_hccl_comm(x.device.index)
     if not comm:
         raise RuntimeError(f"group {group.group_name} has no HCCL communicator on {x.device}")
     return comm
+
+
+def all_reduce_on_current_stream(x: torch.Tensor, group: dist.ProcessGroup) -> None:
+    """In-place SUM, preserving the input dtype."""
+    torch.ops.xllm_ops.npu_all_reduce(x, _hccl_comm(group, x))
+
+
+def all_gather_on_current_stream(input: torch.Tensor, output: torch.Tensor, group: dist.ProcessGroup) -> None:
+    """Gather equal input blocks in rank order into a nonoverlapping output.
+
+    ``output.numel()`` must equal ``group.size() * input.numel()``.
+    """
+    torch.ops.xllm_ops.npu_all_gather(input, output, _hccl_comm(group, input))
+
+
+def reduce_scatter_on_current_stream(input: torch.Tensor, output: torch.Tensor, group: dist.ProcessGroup) -> None:
+    """SUM rank-ordered blocks and scatter into a nonoverlapping output.
+
+    ``input.numel()`` must equal ``group.size() * output.numel()``.
+    """
+    torch.ops.xllm_ops.npu_reduce_scatter(input, output, _hccl_comm(group, input))

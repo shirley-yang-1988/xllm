@@ -63,31 +63,29 @@ class ProcessGroupImpl : public ProcessGroup {
   c10_npu::NPUStream comm_stream_;
 };
 
-// Issue an in-place SUM all-reduce of `input` over the communicator `comm`
-// stands for, submitted on the stream the caller is already on. The
-// communicator is the one of the group to reduce over: the Python model
-// executor reduces over process groups the Python side created itself, so this
-// side cannot look the communicator up and the caller passes the handle. It
-// crosses as a plain integer because a torch schema has no pointer type
-// ("npu_all_reduce" in npu_ops_library.cpp).
-//
-// Submitting through torch_npu's ProcessGroupHCCL instead puts the collective
-// on the communication stream that group owns and makes the caller's stream
-// wait for it, which a captured ACLGraph then carries as a cross-stream edge
-// around every collective.  A collective submitted here carries no such edge.
-// The communicator must expand on AIV (HCCL_OP_EXPANSION_MODE=AIV): an
-// AICPU-expanded collective cannot run on the capture stream and fails the
-// capture instead of degrading silently.
+// Submit on the current NPU stream. Buffers must be dense, contiguous, nonempty
+// and in ND storage format. The caller owns the communicator (encoded as an
+// integer for Torch) and buffers, and must retain them through graph replay.
+// ACLGraph capture requires HCCL_OP_EXPANSION_MODE=AIV.
+// In-place SUM, preserving dtype.
 void all_reduce_on_current_stream(torch::Tensor& input, int64_t comm);
 
-// TODO: LOG HcclGetErrorString(r)
+// Out-of-place, rank-ordered concatenation: output.numel = W * input.numel.
+void all_gather_on_current_stream(const torch::Tensor& input,
+                                  torch::Tensor& output,
+                                  int64_t comm);
+
+// Out-of-place SUM of rank-ordered blocks: input.numel = W * output.numel.
+void reduce_scatter_on_current_stream(const torch::Tensor& input,
+                                      torch::Tensor& output,
+                                      int64_t comm);
+
 #if defined(USE_NPU)
-#define HCCLCHECK(cmd)                     \
-  do {                                     \
-    HcclResult r = cmd;                    \
-    if (r != HCCL_SUCCESS) {               \
-      LOG(FATAL) << "Failed, HCCL error."; \
-    }                                      \
+#define HCCLCHECK(cmd)                                                     \
+  do {                                                                     \
+    const HcclResult result = (cmd);                                       \
+    CHECK_EQ(result, HCCL_SUCCESS)                                         \
+        << #cmd << " failed, HCCL error " << static_cast<int32_t>(result); \
   } while (0)
 #endif
 }  // namespace xllm

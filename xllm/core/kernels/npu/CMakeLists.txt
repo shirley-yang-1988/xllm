@@ -44,6 +44,7 @@ cc_library(
     rec_constrained_topk.cpp
     npu_ops_library.cpp
   DEPS
+    :parallel_state
     :torch_npu_kernels
     :tilelang_kernels
     xllm_ops
